@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from pyproj import Transformer
+from sqlalchemy import text
 from shapely.geometry import Polygon, box, Point
 
 # --- CRS transformers (same as your Voronoi script) ---
@@ -381,7 +382,7 @@ if __name__ == "__main__":
             FROM merged_sensors
             WHERE id IN (SELECT DISTINCT sensor_id FROM MAD_merged_aq_data) 
             """
-    df = pd.read_sql_query(query, con=metraq_db.connection)
+    df = pd.read_sql_query(text(query), con=metraq_db.connection)
 
     # Build grid with 1000 m cells and 1000 m margin around sensors
     ctx = prepare_grid_context(df, cell_size_m=1000, margin_m_x=0, margin_m_y=0)

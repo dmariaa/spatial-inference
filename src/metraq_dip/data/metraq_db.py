@@ -1,3 +1,5 @@
+import os
+from threading import Lock
 from typing import List
 
 import pandas as pd
@@ -8,8 +10,28 @@ def _metraq_db_generator():
     class MetraqDB:
         def __init__(self):
             self.connection_string = "mariadb+pymysql://root:capo.2024$@capo-escobar.etsii.urjc.es:3306/traffic-database?collation=utf8mb4_general_ci"
-            self.engine = create_engine(self.connection_string, echo=False)
-            self.connection = self.engine.connect()
+            self.engine = create_engine(self.connection_string, echo=False, pool_pre_ping=True)
+            self._connection = None
+            self._connection_pid = None
+            self._connection_lock = Lock()
+
+        @property
+        def connection(self):
+            current_pid = os.getpid()
+
+            with self._connection_lock:
+                if (
+                    self._connection is None
+                    or self._connection.closed
+                    or self._connection_pid != current_pid
+                ):
+                    if self._connection is not None and not self._connection.closed:
+                        self._connection.close()
+
+                    self._connection = self.engine.connect()
+                    self._connection_pid = current_pid
+
+                return self._connection
 
         def get_sensors(self, *, magnitudes: List[int], sensors: List[int] = None) -> pd.DataFrame:
             aq_sensors_query = (f"SELECT id, utm_x, utm_y"
@@ -18,7 +40,7 @@ def _metraq_db_generator():
                                 f"             FROM MAD_merged_aq_data "
                                 f"             WHERE magnitude_id IN ({','.join(map(str, magnitudes))}))")
 
-            df = pd.read_sql_query(aq_sensors_query, con=self.connection, parse_dates=['entry_date'])
+            df = pd.read_sql_query(text(aq_sensors_query), con=self.connection)
             df["id"] = df["id"].astype(int)
 
             if sensors is not None:
@@ -28,9 +50,9 @@ def _metraq_db_generator():
 
         def execute(self, sql: str, data: dict = None):
             if data is not None:
-                results = self.connection.execution_options(stream_results=True).execute(text(sql), data)
+                results = self.connection.execute(text(sql), data)
             else:
-                results = self.connection.execution_options(stream_results=True).execute(text(sql))
+                results = self.connection.execute(text(sql))
 
             if results is not None and results.returns_rows:
                 return results

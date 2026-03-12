@@ -26,7 +26,7 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     h, w = grid_ctx.get("grid").shape
     m, t, s = data.shape
 
-    df_sensors = pd.read_sql("SELECT id, utm_x, utm_y FROM traffic_sensors", con=metraq_db.connection)
+    df_sensors = pd.read_sql_query(text("SELECT id, utm_x, utm_y FROM traffic_sensors"), con=metraq_db.connection)
 
     if sensor_ids is None:
         sensor_ids = df_sensors["id"].to_numpy()

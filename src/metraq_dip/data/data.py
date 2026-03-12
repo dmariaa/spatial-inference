@@ -94,7 +94,7 @@ def get_grid():
             FROM merged_sensors
             WHERE id IN (SELECT DISTINCT sensor_id FROM MAD_merged_aq_data)
             """
-    df = pd.read_sql_query(query, con=metraq_db.connection)
+    df = pd.read_sql_query(text(query), con=metraq_db.connection)
 
     # Build a grid with 1000 m cells and 1000 m margin around sensors
     ctx = prepare_grid_context(df, cell_size_m=1000, margin_m_x=3000, margin_m_y=2000)
@@ -280,7 +280,7 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     h, w = grid_ctx.get("grid").shape
     m, t, s = data.shape
 
-    df_sensors = pd.read_sql("SELECT id, utm_x, utm_y FROM merged_sensors", con=metraq_db.connection)
+    df_sensors = pd.read_sql_query(text("SELECT id, utm_x, utm_y FROM merged_sensors"), con=metraq_db.connection)
 
     rows = np.zeros(s, dtype=np.int64)
     cols = np.zeros(s, dtype=np.int64)
