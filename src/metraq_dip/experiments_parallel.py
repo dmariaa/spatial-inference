@@ -242,5 +242,61 @@ def run_experiments(
 
 
 if __name__ == "__main__":
-    run_experiments(config_base=None, output_folder="output/experiments", experiment_name="experiment_test_6",
-                    max_workers=4)
+    from pathlib import Path
+
+
+    @click.command()
+    @click.option(
+        "--config-file",
+        default=None,
+        type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True, path_type=Path),
+        help="Path to a YAML config file.",
+    )
+    @click.option(
+        "--output-folder",
+        default="output/experiments",
+        show_default=True,
+        type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+        help="Base folder where experiment sessions are stored.",
+    )
+    @click.option(
+        "--experiment-name",
+        default=None,
+        help="Experiment session name. If omitted, a timestamped name is generated.",
+    )
+    @click.option(
+        "--max-workers",
+        default=None,
+        type=click.IntRange(min=1),
+        help="Number of parallel workers to use. Defaults to CPU count.",
+    )
+    def cli(
+            config_file: Optional[Path],
+            output_folder: Path,
+            experiment_name: Optional[str],
+            max_workers: Optional[int],
+    ) -> None:
+        config_base: Optional[dict[str, Any]] = None
+        if config_file is not None:
+            with config_file.open("r", encoding="utf-8") as file:
+                loaded = yaml.safe_load(file)
+
+            if loaded is None:
+                config_base = {}
+            elif isinstance(loaded, dict):
+                config_base = loaded
+            else:
+                raise click.ClickException("Configuration file must contain a YAML mapping at the top level.")
+
+        try:
+            run_experiments(
+                config_base=config_base,
+                output_folder=str(output_folder),
+                experiment_name=experiment_name,
+                max_workers=max_workers,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+
+    cli()
