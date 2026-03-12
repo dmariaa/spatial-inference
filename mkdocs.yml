@@ -1,0 +1,13 @@
+site_name: METRAQ Spatial Inference Docs
+site_description: Internal documentation for experiment setup and results
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  queries.sql
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - Experiments Schema: experiments.md
+  - Experiment Results: experiment_results.md
+  - Notes: cosas.md
