@@ -87,8 +87,11 @@ def get_random_time_windows(*,
                             year: int,
                             windows_per_month: int = 10,
                             weekend_fraction: float = 0.4,
-                            start_hours: Tuple[int, ...] = (8, 17)
+                            start_hours: list[int] = None
                             ):
+    if start_hours is None:
+        raise ValueError("start_hours must be provided")
+
     rng = np.random.default_rng()
     # Keep user-provided order, remove duplicates to avoid duplicated windows.
     start_hours = tuple(dict.fromkeys(int(h) for h in start_hours))
