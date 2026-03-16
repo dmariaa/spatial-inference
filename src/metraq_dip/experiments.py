@@ -150,11 +150,12 @@ def _run_single_experiment(
     test_sensor_group: list[int],
     sensor_group_key: str,
     time_window_iso: str,
+    disable_nested_tqdm: bool = False,
 ) -> dict[str, Any]:
-    # Silence nested trainer progress bars in worker processes.
+    # Keep nested trainer bars only in sequential mode.
     import metraq_dip.trainer.trainer_dip as trainer_dip_module
 
-    trainer_dip_module.tqdm = partial(tqdm, disable=True)
+    trainer_dip_module.tqdm = partial(tqdm, disable=disable_nested_tqdm)
     time_window_dt = pd.to_datetime(time_window_iso).to_pydatetime()
 
     config = config_base.copy()
@@ -237,6 +238,9 @@ def run_experiments(
     config_base, experiment_output_folder, test_sensors, time_windows, df = _ensure_base_files(
         config_file=config_file,
     )
+    workers = max_workers if max_workers is not None else os.cpu_count() or 1
+    workers = max(1, workers)
+    run_in_parallel = max_workers is not None and workers > 1
 
     jobs: list[dict[str, Any]] = []
     for test_sensor_group in test_sensors:
@@ -254,16 +258,13 @@ def run_experiments(
                     "test_sensor_group": list(test_sensor_group),
                     "sensor_group_key": sensor_group_key,
                     "time_window_iso": time_window_ts.isoformat(),
+                    "disable_nested_tqdm": run_in_parallel,
                 }
             )
 
     if not jobs:
         click.echo("All experiments are already processed.")
         return
-
-    workers = max_workers if max_workers is not None else os.cpu_count() or 1
-    workers = max(1, workers)
-    run_in_parallel = max_workers is not None and workers > 1
 
     if run_in_parallel:
         click.echo(f"Running {len(jobs)} experiments in parallel with {workers} worker(s).")

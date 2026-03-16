@@ -10,28 +10,36 @@ def _metraq_db_generator():
     class MetraqDB:
         def __init__(self):
             self.connection_string = "mariadb+pymysql://root:capo.2024$@capo-escobar.etsii.urjc.es:3306/traffic-database?collation=utf8mb4_general_ci"
-            self.engine = create_engine(self.connection_string, echo=False, pool_pre_ping=True)
-            self._connection = None
-            self._connection_pid = None
+            self._engine = None
+            self._engine_pid = None
             self._connection_lock = Lock()
 
         @property
-        def connection(self):
+        def engine(self):
             current_pid = os.getpid()
 
             with self._connection_lock:
                 if (
-                    self._connection is None
-                    or self._connection.closed
-                    or self._connection_pid != current_pid
+                    self._engine is None
+                    or self._engine_pid != current_pid
                 ):
-                    if self._connection is not None and not self._connection.closed:
-                        self._connection.close()
+                    if self._engine is not None:
+                        self._engine.dispose()
 
-                    self._connection = self.engine.connect()
-                    self._connection_pid = current_pid
+                    self._engine = create_engine(
+                        self.connection_string,
+                        echo=False,
+                        pool_pre_ping=True,
+                        pool_recycle=1800,
+                    )
+                    self._engine_pid = current_pid
 
-                return self._connection
+                return self._engine
+
+        @property
+        def connection(self):
+            # Backward-compatible alias: return an SQLAlchemy Connectable.
+            return self.engine
 
         def get_sensors(self, *, magnitudes: List[int], sensors: List[int] = None) -> pd.DataFrame:
             aq_sensors_query = (f"SELECT id, utm_x, utm_y"
@@ -40,7 +48,7 @@ def _metraq_db_generator():
                                 f"             FROM MAD_merged_aq_data "
                                 f"             WHERE magnitude_id IN ({','.join(map(str, magnitudes))}))")
 
-            df = pd.read_sql_query(text(aq_sensors_query), con=self.connection)
+            df = pd.read_sql_query(text(aq_sensors_query), con=self.engine)
             df["id"] = df["id"].astype(int)
 
             if sensors is not None:
@@ -49,15 +57,17 @@ def _metraq_db_generator():
             return df
 
         def execute(self, sql: str, data: dict = None):
-            if data is not None:
-                results = self.connection.execute(text(sql), data)
-            else:
-                results = self.connection.execute(text(sql))
+            with self.engine.connect() as connection:
+                if data is not None:
+                    results = connection.execute(text(sql), data)
+                else:
+                    results = connection.execute(text(sql))
 
-            if results is not None and results.returns_rows:
-                return results
+                if results is not None and results.returns_rows:
+                    return results.fetchall()
 
-            return None
+                connection.commit()
+                return None
 
     return MetraqDB()
 

@@ -19,7 +19,7 @@ def get_max_min(magnitudes: list[int]):
         f"FROM aq_magnitudes WHERE id IN ({','.join(map(str, magnitudes))})"
     )
 
-    rows = metraq_db.execute(query).fetchall()
+    rows = metraq_db.execute(query)
     minmax_map = {row[0]: (row[1], row[2]) for row in rows}
 
     # return min_values, max_values
@@ -33,7 +33,7 @@ class Normalizer:
             "SELECT id, min_value, max_value "
             f"FROM aq_magnitudes WHERE id IN ({','.join(map(str, pollutants))})"
         )
-        rows = metraq_db.execute(query).fetchall()
+        rows = metraq_db.execute(query)
 
         # Map by id so ordering matches `pollutants`
         min_map = {row[0]: row[1] for row in rows}
@@ -67,7 +67,7 @@ class TensorNormalizer:
         self.device = device
         
         query = f'SELECT id, min_value, max_value FROM aq_magnitudes WHERE id in ({",".join([str(p) for p in pollutants])})'
-        rows = metraq_db.execute(query).fetchall()
+        rows = metraq_db.execute(query)
         
         min_map = {row[0]: row[1] for row in rows}
         max_map = {row[0]: row[2] for row in rows}
