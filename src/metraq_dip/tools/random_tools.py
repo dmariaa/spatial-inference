@@ -93,16 +93,31 @@ def get_random_time_windows(*,
         raise ValueError("start_hours must be provided")
 
     rng = np.random.default_rng()
-    # Keep user-provided order, remove duplicates to avoid duplicated windows.
-    start_hours = tuple(dict.fromkeys(int(h) for h in start_hours))
-    if len(start_hours) == 0:
+    weighted_start_hours = [int(h) for h in start_hours]
+    if len(weighted_start_hours) == 0:
         raise ValueError("start_hours must contain at least one hour")
-    if any(h < 0 or h > 23 for h in start_hours):
+    if any(h < 0 or h > 23 for h in weighted_start_hours):
         raise ValueError("start_hours must contain values between 0 and 23")
+
+    # Preserve order and multiplicity: duplicates are interpreted as higher selection weight.
+    hour_weights = Counter(weighted_start_hours)
+    unique_start_hours = tuple(hour_weights.keys())
+
     if windows_per_month <= 0:
         raise ValueError("windows_per_month must be > 0")
     if not 0 <= weekend_fraction <= 1:
         raise ValueError("weekend_fraction must be between 0 and 1")
+
+    def sample_weighted_unique(candidates: list[pd.Timestamp], weights: list[float], n: int) -> list[pd.Timestamp]:
+        if n <= 0 or not candidates:
+            return []
+        if n >= len(candidates):
+            return list(candidates)
+
+        probabilities = np.asarray(weights, dtype=np.float64)
+        probabilities = probabilities / probabilities.sum()
+        selected_idx = rng.choice(len(candidates), size=n, replace=False, p=probabilities)
+        return [candidates[int(i)] for i in selected_idx]
 
     windows = []
 
@@ -114,46 +129,73 @@ def get_random_time_windows(*,
 
         def build_candidates(days):
             candidates = []
+            weights = []
             for day in days:
-                for h in start_hours:
+                for h in unique_start_hours:
                     start = day + pd.Timedelta(hours=h)
                     # Keep existing validity criterion (handles DST-aware timestamps if ever used).
                     if len(pd.date_range(start, start + pd.Timedelta(hours=23), freq="h")) == 24:
                         candidates.append(start)
-            return candidates
+                        weights.append(float(hour_weights[h]))
+            return candidates, weights
 
-        weekend_candidates = build_candidates(weekend_days)
-        weekday_candidates = build_candidates(weekday_days)
+        weekend_candidates, weekend_weights = build_candidates(weekend_days)
+        weekday_candidates, weekday_weights = build_candidates(weekday_days)
         max_month_candidates = len(weekend_candidates) + len(weekday_candidates)
         if max_month_candidates < windows_per_month:
             raise ValueError(
-                f"Cannot sample {windows_per_month} unique windows for {year}-{month:02d} "
-                f"with start_hours={start_hours}. Maximum possible is {max_month_candidates}."
+                f"Cannot sample {windows_per_month} unique windows for {year}-{month:02d} with "
+                f"start_hours={weighted_start_hours}. Maximum possible is {max_month_candidates}."
             )
-        rng.shuffle(weekend_candidates)
-        rng.shuffle(weekday_candidates)
 
         weekend_target = int(round(windows_per_month * weekend_fraction))
         weekend_take = min(weekend_target, len(weekend_candidates))
 
-        month_windows = weekend_candidates[:weekend_take]
+        month_windows = sample_weighted_unique(weekend_candidates, weekend_weights, weekend_take)
 
         weekday_needed = windows_per_month - len(month_windows)
         weekday_take = min(weekday_needed, len(weekday_candidates))
-        month_windows.extend(weekday_candidates[:weekday_take])
+        month_windows.extend(sample_weighted_unique(weekday_candidates, weekday_weights, weekday_take))
 
         # If one side cannot satisfy its share, fill from remaining windows on the other side.
         if len(month_windows) < windows_per_month:
             used = set(month_windows)
-            remaining = [w for w in weekend_candidates[weekend_take:] if w not in used]
-            remaining.extend(w for w in weekday_candidates[weekday_take:] if w not in used)
-            rng.shuffle(remaining)
-            month_windows.extend(remaining[:windows_per_month - len(month_windows)])
+            remaining = [w for w in weekend_candidates if w not in used]
+            remaining.extend(w for w in weekday_candidates if w not in used)
+            remaining_weights = [float(hour_weights[w.hour]) for w in remaining]
+            month_windows.extend(
+                sample_weighted_unique(remaining, remaining_weights, windows_per_month - len(month_windows))
+            )
 
         month_windows = sorted(month_windows)
         windows.extend(month_windows)
 
     return sorted(windows)
+
+
+def get_all_time_windows(*, year: int, start_hours: list[int] | None = None):
+    if start_hours is None:
+        start_hours = list(range(24))
+
+    # Keep user-provided order, remove duplicates.
+    normalized_start_hours = tuple(dict.fromkeys(int(h) for h in start_hours))
+    if len(normalized_start_hours) == 0:
+        raise ValueError("start_hours must contain at least one hour")
+    if any(h < 0 or h > 23 for h in normalized_start_hours):
+        raise ValueError("start_hours must contain values between 0 and 23")
+
+    windows: list[pd.Timestamp] = []
+    for month in range(1, 13):
+        n_days = monthrange(year, month)[1]
+        for day in range(1, n_days + 1):
+            base_day = pd.Timestamp(year=year, month=month, day=day)
+            for hour in normalized_start_hours:
+                start = base_day + pd.Timedelta(hours=hour)
+                if len(pd.date_range(start, start + pd.Timedelta(hours=23), freq="h")) == 24:
+                    windows.append(start)
+
+    return sorted(windows)
+
 
 
 if __name__=="__main__":
@@ -162,4 +204,5 @@ if __name__=="__main__":
     # s2 = get_spread_test_groups(n_groups=10, group_size=4, max_uses_per_sensor=2, magnitudes=[7])
     # print(s==s2)
     time_windows = get_random_time_windows(year=2024, windows_per_month=20, start_hours=list(range(6, 23)))
+    all_windows = get_all_time_windows(year=2024)
     pass

@@ -17,11 +17,14 @@ def import_metraq_db(monkeypatch):
             self.connect_calls += 1
             return "fake_connection"
 
+        def dispose(self):
+            return None
+
     fake_engine = FakeEngine()
 
-    def fake_create_engine(connection_string, echo=False):
+    def fake_create_engine(connection_string, **kwargs):
         created["connection_string"] = connection_string
-        created["echo"] = echo
+        created.update(kwargs)
         return fake_engine
 
     monkeypatch.setattr(sqlalchemy, "create_engine", fake_create_engine)
@@ -32,30 +35,33 @@ def import_metraq_db(monkeypatch):
 
 
 def test_get_sensors_calls_read_sql_query_with_magnitudes(monkeypatch):
-    module, _, _ = import_metraq_db(monkeypatch)
+    module, created, fake_engine = import_metraq_db(monkeypatch)
     captured = {}
 
-    def fake_read_sql_query(query, con, parse_dates):
-        captured["query"] = query
+    def fake_read_sql_query(query, con, **kwargs):
+        captured["query"] = str(query)
         captured["con"] = con
-        captured["parse_dates"] = parse_dates
+        captured["kwargs"] = kwargs
         return pd.DataFrame({"id": [1], "utm_x": [1.0], "utm_y": [2.0]})
 
     monkeypatch.setattr(module.pd, "read_sql_query", fake_read_sql_query)
 
     result = module.metraq_db.get_sensors(magnitudes=[3, 4], sensors=None)
 
-    assert captured["con"] == "fake_connection"
-    assert captured["parse_dates"] == ["entry_date"]
+    assert captured["con"] is fake_engine
+    assert captured["kwargs"] == {}
     assert "SELECT id, utm_x, utm_y" in captured["query"]
     assert "magnitude_id IN (3,4)" in captured["query"]
+    assert created["echo"] is False
+    assert created["pool_pre_ping"] is True
+    assert created["pool_recycle"] == 1800
     assert result["id"].tolist() == [1]
 
 
 def test_get_sensors_casts_id_and_filters(monkeypatch):
     module, _, _ = import_metraq_db(monkeypatch)
 
-    def fake_read_sql_query(query, con, parse_dates):
+    def fake_read_sql_query(query, con, **kwargs):
         return pd.DataFrame(
             {"id": ["1", "2", "3"], "utm_x": [1.0, 2.0, 3.0], "utm_y": [4.0, 5.0, 6.0]}
         )
@@ -71,7 +77,7 @@ def test_get_sensors_casts_id_and_filters(monkeypatch):
 def test_get_sensors_no_filter_when_sensors_none(monkeypatch):
     module, _, _ = import_metraq_db(monkeypatch)
 
-    def fake_read_sql_query(query, con, parse_dates):
+    def fake_read_sql_query(query, con, **kwargs):
         return pd.DataFrame({"id": ["1", "2"], "utm_x": [1.0, 2.0], "utm_y": [3.0, 4.0]})
 
     monkeypatch.setattr(module.pd, "read_sql_query", fake_read_sql_query)

@@ -76,6 +76,49 @@ def test_get_random_time_windows_respects_weekend_ratio_when_feasible(monkeypatc
         assert weekend_count == expected_weekend_count
 
 
+def test_get_random_time_windows_uses_duplicate_hours_as_weights(monkeypatch):
+    module = import_random_tools(monkeypatch)
+
+    class SpyRng:
+        def __init__(self):
+            self.calls = []
+
+        def choice(self, a, size, replace, p):
+            self.calls.append(
+                {
+                    "a": int(a),
+                    "size": int(size),
+                    "replace": bool(replace),
+                    "p": module.np.asarray(p, dtype=module.np.float64),
+                }
+            )
+            return module.np.arange(size, dtype=module.np.int64)
+
+    spy_rng = SpyRng()
+    monkeypatch.setattr(module.np.random, "default_rng", lambda: spy_rng)
+
+    module.get_random_time_windows(
+        year=2024,
+        windows_per_month=20,
+        weekend_fraction=0.4,
+        start_hours=(7, 7, 7, 8),
+    )
+
+    weighted_calls = [
+        call
+        for call in spy_rng.calls
+        if len(module.np.unique(module.np.round(call["p"], 14))) > 1
+    ]
+    assert weighted_calls
+
+    for call in weighted_calls:
+        probs = call["p"]
+        unique_probs = module.np.unique(module.np.round(probs, 14))
+        assert len(unique_probs) == 2
+        ratio = float(unique_probs.max() / unique_probs.min())
+        assert module.np.isclose(ratio, 3.0, rtol=1e-9)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

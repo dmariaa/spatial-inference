@@ -10,10 +10,11 @@ from typing import Any, Optional
 import click
 import numpy as np
 import pandas as pd
-import yaml
 from tqdm import tqdm
 
+from metraq_dip.tools.config_tools import SessionConfig, load_session_config
 from metraq_dip.tools.random_tools import (
+    get_all_time_windows,
     get_random_time_windows,
     get_spread_test_groups,
     sensor_group_hash,
@@ -26,74 +27,17 @@ def get_experiment_name(sensor_group_key: str, time_window: datetime) -> str:
     return f"exp_{sensor_group_key}_{time_window.strftime('%Y%m%dT%H%M%S')}"
 
 
-def _load_config_for_training(config_file: Path) -> dict[str, Any]:
-    with config_file.open("r", encoding="utf-8") as file:
-        loaded = yaml.safe_load(file)
-    if loaded is None:
-        raise ValueError("Configuration file is empty. Please provide a YAML mapping with the experiment settings.")
-    if not isinstance(loaded, dict):
-        raise ValueError("Configuration file must contain a YAML mapping at the top level.")
-    if "pollutants" not in loaded:
-        raise ValueError("Configuration file must define a top-level 'pollutants' field.")
-    return loaded
+def _get_time_windows(session_config: SessionConfig) -> list[pd.Timestamp]:
+    if session_config.random_time_windows is not None:
+        random_time_windows_params = session_config.random_time_windows.model_dump()
+        return get_random_time_windows(**random_time_windows_params)
 
+    all_time_windows_config = session_config.all_time_windows
+    if all_time_windows_config is None:
+        raise ValueError("No time windows strategy configured.")
 
-def _validate_config(
-    config_base: Optional[dict[str, Any]]
-) -> tuple[dict[str, int], dict[str, Any]]:
-    loaded = config_base
-
-    if "spread_test_groups" not in loaded:
-        raise ValueError(
-            "Configuration file must define a top-level 'spread_test_groups' mapping "
-            "with n_groups, group_size and max_uses_per_sensor."
-        )
-    if "random_time_windows" not in loaded:
-        raise ValueError(
-            "Configuration file must define a top-level 'random_time_windows' mapping "
-            "with year, windows_per_month and start_hours."
-        )
-
-    spread_test_groups_cfg = loaded["spread_test_groups"]
-    random_time_windows_cfg = loaded["random_time_windows"]
-    if not isinstance(spread_test_groups_cfg, dict):
-        raise ValueError("'spread_test_groups' must be a mapping.")
-    if not isinstance(random_time_windows_cfg, dict):
-        raise ValueError("'random_time_windows' must be a mapping.")
-
-    spread_required = ("n_groups", "group_size", "max_uses_per_sensor")
-    missing_spread = [k for k in spread_required if k not in spread_test_groups_cfg]
-    if missing_spread:
-        raise ValueError(
-            f"'spread_test_groups' is missing required field(s): {', '.join(missing_spread)}."
-        )
-
-    time_required = ("year", "windows_per_month", "start_hours")
-    missing_time = [k for k in time_required if k not in random_time_windows_cfg]
-    if missing_time:
-        raise ValueError(
-            f"'random_time_windows' is missing required field(s): {', '.join(missing_time)}."
-        )
-
-    spread_test_groups_params = {
-        "n_groups": int(spread_test_groups_cfg["n_groups"]),
-        "group_size": int(spread_test_groups_cfg["group_size"]),
-        "max_uses_per_sensor": int(spread_test_groups_cfg["max_uses_per_sensor"]),
-    }
-
-    start_hours_cfg = random_time_windows_cfg["start_hours"]
-    if not isinstance(start_hours_cfg, list) or not start_hours_cfg:
-        raise ValueError("'random_time_windows.start_hours' must be a non-empty list of hours.")
-
-    random_time_windows_params: dict[str, Any] = {
-        "year": int(random_time_windows_cfg["year"]),
-        "windows_per_month": int(random_time_windows_cfg["windows_per_month"]),
-        "start_hours": [int(hour) for hour in start_hours_cfg],
-    }
-    if "weekend_fraction" in random_time_windows_cfg:
-        random_time_windows_params["weekend_fraction"] = float(random_time_windows_cfg["weekend_fraction"])
-
-    return spread_test_groups_params, random_time_windows_params
+    all_time_windows_params = all_time_windows_config.model_dump()
+    return get_all_time_windows(**all_time_windows_params)
 
 
 def _ensure_base_files(
@@ -101,7 +45,10 @@ def _ensure_base_files(
     config_file: Path,
 ) -> tuple[dict[str, Any], str, np.ndarray, np.ndarray, pd.DataFrame]:
     experiment_output_folder = str(config_file.parent)
-    config_base = _load_config_for_training(config_file)
+    session_config = load_session_config(config_file)
+    config_base = session_config.model_dump(
+        exclude={"spread_test_groups", "random_time_windows", "all_time_windows"},
+    )
 
     data_file = os.path.join(experiment_output_folder, "data.npz")
     if os.path.exists(data_file):
@@ -110,16 +57,15 @@ def _ensure_base_files(
         test_sensors = data["test_sensors"]
         time_windows = data["time_windows"]
     else:
-        spread_test_groups_params, random_time_windows_params = _validate_config(config_base)
+        spread_test_groups_params = session_config.spread_test_groups
         click.echo(f"Generating data for session at {experiment_output_folder}")
-        pollutants = config_base["pollutants"]
         test_sensors, _ = get_spread_test_groups(
-            n_groups=spread_test_groups_params["n_groups"],
-            group_size=spread_test_groups_params["group_size"],
-            max_uses_per_sensor=spread_test_groups_params["max_uses_per_sensor"],
-            magnitudes=pollutants,
+            n_groups=spread_test_groups_params.n_groups,
+            group_size=spread_test_groups_params.group_size,
+            max_uses_per_sensor=spread_test_groups_params.max_uses_per_sensor,
+            magnitudes=session_config.pollutants,
         )
-        time_windows = get_random_time_windows(**random_time_windows_params)
+        time_windows = _get_time_windows(session_config)
         np.savez(data_file, test_sensors=test_sensors, time_windows=time_windows)
 
     results_file = os.path.join(experiment_output_folder, "results.csv")
