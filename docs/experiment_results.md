@@ -1,56 +1,79 @@
 # Experiment Results
 
-- Generated at: `2026-03-12 10:23:40`
+- Generated at: `2026-03-18 18:51:37`
 - Source root: `output/experiments`
 - Data used per session: `config.yaml`, `data.npz`, `results.csv`
 - Ignored by design: detailed `exp_*.npz` files
 
-## Session Comparison
+## 1. Configuration Differences
 
-| Session | Processed / Expected | Completion | Norm | Meteo | TimeCh | Dist2Sens | DIP L1 mean | KRG L1 mean | IDW L1 mean | DIP vs KRG | DIP vs IDW | DIP MSE mean | KRG MSE mean | IDW MSE mean | Best L1 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `experiment_test` | 2400/2400 | 100.0% | no | no | no | no | 7.0831 | 6.3769 | 6.2931 | -11.1% | -12.6% | 384.7295 | 243.2277 | 237.0764 | IDW |
-| `experiment_test_2` | 2400/2400 | 100.0% | no | no | no | yes | 7.0801 | 6.3769 | 6.2931 | -11.0% | -12.5% | 384.3781 | 243.2277 | 237.0764 | IDW |
-| `experiment_test_3` | 2400/2400 | 100.0% | yes | no | no | yes | 0.0053 | 0.0032 | 0.0031 | -66.6% | -68.8% | 0.0002 | 0.0001 | 0.0001 | IDW |
-| `experiment_test_4` | 2400/2400 | 100.0% | yes | no | no | yes | 0.6080 | 0.6629 | 0.6715 | 8.3% | 9.5% | 1.5264 | 1.4411 | 1.5031 | DIP |
-| `experiment_test_5` | 2400/2400 | 100.0% | yes | yes | no | yes | 0.6097 | 0.6511 | 0.6506 | 6.4% | 6.3% | 1.7307 | 1.5486 | 1.5761 | DIP |
-| `experiment_test_6` | 1044/2400 | 43.5% | yes | no | yes | yes | 0.5924 | 0.6495 | 0.6423 | 8.8% | 7.8% | 1.5325 | 1.4593 | 1.4482 | DIP |
-| `experiment_test_parallel` | 2400/2400 | 100.0% | yes | no | no | yes | 0.6007 | 0.6511 | 0.6506 | 7.7% | 7.7% | 1.6568 | 1.5486 | 1.5761 | DIP |
+| Session | pollut. | norm | meteo | time_ch | dist2sens | m.skip | grp_n | grp_sz | grp_max_use | tw_mode | tw_year | tw_win_mo | tw_start_h | tw_weekend |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `DGX/experiment_NOX` | [12] | yes | no | yes | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [7, 8, 9] | 0.25 |
+| `DGX/experiment_hours` | [7] | yes | no | no | no | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [7, 8, 9] | 0.25 |
+| `ESCOBAR/experiment_skipconn` | [7] | yes | no | no | yes | yes | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| `ESCOBAR/experiment_skipconn2` | [7] | yes | no | no | yes | yes | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| `ESCOBAR/experiment_skipconn_hourrange` | [7] | yes | no | no | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] | 0.4 |
+| `experiment_test_2` | [7] | no | no | no | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [8, 17] | 0.4 |
+| `experiment_test_3` | [7] | yes | no | no | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [8, 17] | 0.4 |
+| `experiment_test_4` | [7] | yes | no | no | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [8, 17] | 0.4 |
+| `experiment_test_5` | [7] | yes | yes | no | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [8, 17] | 0.4 |
+| `experiment_test_6` | [7] | yes | no | yes | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [8, 17] | 0.4 |
+| `experiment_test_parallel` | [7] | yes | no | no | yes | no | 10 | 4 | 2 | random_time_windows | 2024 | 20 | [8, 17] | 0.4 |
 
-## DIP Ranking (Complete Sessions Only)
+Legend: `pollut.` = `pollutants`, `norm` = `normalize`, `meteo` = `add_meteo`, `time_ch` = `add_time_channels`, `dist2sens` = `add_distance_to_sensors`, `m.skip` = `model.skip_connections`, `grp_n` = `spread_test_groups.n_groups`, `grp_sz` = `spread_test_groups.group_size`, `grp_max_use` = `spread_test_groups.max_uses_per_sensor`, `tw_mode` = `time_windows.strategy`, `tw_year` = `time_windows.year`, `tw_win_mo` = `time_windows.windows_per_month`, `tw_start_h` = `time_windows.start_hours`, `tw_weekend` = `time_windows.weekend_fraction`
 
-### By DIP L1 mean (lower is better)
+## 2. Mean L1/MSE by Model
 
-1. `experiment_test_3`: 0.0053
-2. `experiment_test_parallel`: 0.6007
-3. `experiment_test_4`: 0.6080
-4. `experiment_test_5`: 0.6097
-5. `experiment_test_2`: 7.0801
-6. `experiment_test`: 7.0831
+| Session | Processed / Expected | Completion | DIP L1 mean | DIP MSE mean | KRG L1 mean | KRG MSE mean | IDW L1 mean | IDW MSE mean | Best L1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `DGX/experiment_NOX` | 2400/2400 | 100.0% | 0.6046 | 0.9944 | 0.6210 | 1.0264 | 0.6459 | 1.0631 | DIP |
+| `DGX/experiment_hours` | 2400/2400 | 100.0% | 0.9288 | 3.3539 | 0.9977 | 3.2143 | 1.0048 | 3.3095 | DIP |
+| `ESCOBAR/experiment_skipconn` | 2400/2400 | 100.0% | 0.6547 | 1.9800 | 0.7040 | 1.7993 | 0.7140 | 1.8610 | DIP |
+| `ESCOBAR/experiment_skipconn2` | 2400/2400 | 100.0% | 0.6016 | 1.6889 | 0.6511 | 1.5486 | 0.6506 | 1.5761 | DIP |
+| `ESCOBAR/experiment_skipconn_hourrange` | 2400/2400 | 100.0% | 0.5235 | 1.2978 | 0.5757 | 1.2656 | 0.5873 | 1.3074 | DIP |
+| `experiment_test_2` | 2400/2400 | 100.0% | 7.0801 | 384.3781 | 6.3769 | 243.2277 | 6.2931 | 237.0764 | IDW |
+| `experiment_test_3` | 2400/2400 | 100.0% | 0.0053 | 0.0002 | 0.0032 | 0.0001 | 0.0031 | 0.0001 | IDW |
+| `experiment_test_4` | 2400/2400 | 100.0% | 0.6080 | 1.5264 | 0.6629 | 1.4411 | 0.6715 | 1.5031 | DIP |
+| `experiment_test_5` | 2400/2400 | 100.0% | 0.6097 | 1.7307 | 0.6511 | 1.5486 | 0.6506 | 1.5761 | DIP |
+| `experiment_test_6` | 2400/2400 | 100.0% | 0.6014 | 1.6436 | 0.6511 | 1.5486 | 0.6506 | 1.5761 | DIP |
+| `experiment_test_parallel` | 2400/2400 | 100.0% | 0.6007 | 1.6568 | 0.6511 | 1.5486 | 0.6506 | 1.5761 | DIP |
 
-### By DIP MSE mean (lower is better)
+## 3. Friedman Test (DIP vs KRG vs IDW)
 
-1. `experiment_test_3`: 0.0002
-2. `experiment_test_4`: 1.5264
-3. `experiment_test_parallel`: 1.6568
-4. `experiment_test_5`: 1.7307
-5. `experiment_test_2`: 384.3781
-6. `experiment_test`: 384.7295
+| Session | Samples | Friedman stat | p-value | Significant (p < 0.05) | DIP mean rank | KRG mean rank | IDW mean rank |
+| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| `DGX/experiment_NOX` | 2400 | 281.0033 | 9.570e-62 | yes | 1.8700 | 1.8508 | 2.2792 |
+| `DGX/experiment_hours` | 2400 | 246.5689 | 2.872e-54 | yes | 1.7383 | 2.1302 | 2.1315 |
+| `ESCOBAR/experiment_skipconn` | 2400 | 437.1324 | 1.196e-95 | yes | 1.6700 | 2.0681 | 2.2619 |
+| `ESCOBAR/experiment_skipconn2` | 2400 | 320.5300 | 2.499e-70 | yes | 1.7108 | 2.0808 | 2.2083 |
+| `ESCOBAR/experiment_skipconn_hourrange` | 2400 | 484.0358 | 7.815e-106 | yes | 1.6442 | 2.1012 | 2.2546 |
+| `experiment_test_2` | 2400 | 216.5004 | 9.717e-48 | yes | 1.7808 | 2.0144 | 2.2048 |
+| `experiment_test_3` | 2400 | 815.4700 | 8.374e-178 | yes | 2.4633 | 1.6744 | 1.8623 |
+| `experiment_test_4` | 2400 | 455.2504 | 1.392e-99 | yes | 1.6604 | 2.0785 | 2.2610 |
+| `experiment_test_5` | 2400 | 289.4633 | 1.393e-63 | yes | 1.7275 | 2.0683 | 2.2042 |
+| `experiment_test_6` | 2400 | 319.7725 | 3.650e-70 | yes | 1.7108 | 2.0821 | 2.2071 |
+| `experiment_test_parallel` | 2400 | 340.7425 | 1.020e-74 | yes | 1.7004 | 2.0892 | 2.2104 |
 
 ## Session Metadata
 
-| Session | Pollutants | Epochs | Ensemble | Hours | Sensor groups | Time windows | Date range |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `experiment_test` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
-| `experiment_test_2` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
-| `experiment_test_3` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
-| `experiment_test_4` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
-| `experiment_test_5` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
-| `experiment_test_6` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
-| `experiment_test_parallel` | `[7]` | 250 | 5 | 24 | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
+| Session | Pollutants | Epochs | Ensemble | Hours | LR | Norm | Meteo | TimeCh | Coord | Dist2Sens | Sensor groups | Time windows | Date range |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- | --- | ---: | ---: | --- |
+| `DGX/experiment_NOX` | `[12]` | 250 | 5 | 24 | 0.01 | yes | no | yes | no | yes | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-30 08:00:00 |
+| `DGX/experiment_hours` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | no | 10 | 240 | 2024-01-01 08:00:00 -> 2024-12-31 09:00:00 |
+| `ESCOBAR/experiment_skipconn` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | yes | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
+| `ESCOBAR/experiment_skipconn2` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | yes | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
+| `ESCOBAR/experiment_skipconn_hourrange` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | yes | 10 | 240 | 2024-01-05 06:00:00 -> 2024-12-28 12:00:00 |
+| `experiment_test_2` | `[7]` | 250 | 5 | 24 | 0.01 | no | no | no | no | yes | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
+| `experiment_test_3` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | yes | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
+| `experiment_test_4` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | yes | 10 | 240 | 2024-01-02 08:00:00 -> 2024-12-31 17:00:00 |
+| `experiment_test_5` | `[7]` | 250 | 5 | 24 | 0.01 | yes | yes | no | no | yes | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
+| `experiment_test_6` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | yes | no | yes | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
+| `experiment_test_parallel` | `[7]` | 250 | 5 | 24 | 0.01 | yes | no | no | no | yes | 10 | 240 | 2024-01-01 17:00:00 -> 2024-12-31 17:00:00 |
 
 ## Notes
 
 - Means are computed from rows where `processed = True`.
-- `DIP vs KRG` and `DIP vs IDW` are relative L1 changes: positive means DIP is better.
+- Friedman test is computed with `DIP_L1Loss`, `KRG_L1Loss`, and `IDW_L1Loss` from processed rows.
+- Mean rank interpretation: lower is better.
 - Direct comparison across sessions can be affected by configuration changes (for example normalization and extra channels).

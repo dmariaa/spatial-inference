@@ -204,7 +204,7 @@ def get_experiment_result(experiment: dict):
 
 
 if __name__ == "__main__":
-    experiment_folder = "output/experiments/experiment_test_6"
+    experiment_folder = "output/experiments/experiment_new_norm"
     session = load_training_session(experiment_folder, load_experiments=True)
     results = session['results']
 

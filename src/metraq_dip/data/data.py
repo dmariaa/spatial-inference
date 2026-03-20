@@ -471,9 +471,16 @@ def collect_data(*, start_date: datetime,
         T = train_data.shape[2]
 
         for idx, mag_id in enumerate(pollutants):
-            d = n_data[idx, :, n_mask]
+            # d = n_data[idx, :, n_mask]
+            d = n_data[idx, -1, n_mask]         # normalize to current time values (mean, std)
             mean = d.mean()
             std = d.std()
+
+            if (not np.isfinite(std)) or std < 1e-6:
+                d_fb = n_data[idx, :, n_mask]   # fallback to full 24 h window
+                mean = d_fb.mean()
+                std = d_fb.std()
+
             minmax_map[mag_id] = (mean, std)
             mean_data = np.full_like(train_data[idx], mean, dtype=np.float32)
             std_data = np.full_like(train_data[idx], std, dtype=np.float32)
@@ -524,7 +531,6 @@ if __name__ == "__main__":
                         add_time_channels=True,
                         add_coordinates=True,
                         add_distance_to_sensors=True,
-                        data_split=(4, 4),
                         pollutants=[7, 8],
                         normalize=True
                         )
