@@ -1,3 +1,4 @@
+import warnings
 from typing import Optional, Tuple, Union
 
 import numpy as np
@@ -337,6 +338,53 @@ def count_points_per_cell(ctx: dict) -> pd.DataFrame:
                 "ymax": float(y_edges[iy+1]),
             })
     return pd.DataFrame(rows)
+
+
+def map_sensor_ids_to_grid(
+    ctx: dict,
+    sensors_df: pd.DataFrame,
+    sensor_ids,
+    warn_prefix: str = "Discarding sensors",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    sensor_ids = np.asarray(sensor_ids)
+    sensor_coords = sensors_df.set_index("id")[["utm_x", "utm_y"]].reindex(sensor_ids)
+    has_coords = sensor_coords.notna().all(axis=1).to_numpy()
+
+    grid = ctx["grid"]
+    cell = ctx["cell_size_m"]
+    start_x, start_y = grid[-1, 0].bounds[0], grid[-1, 0].bounds[1]
+    n_rows, n_cols = grid.shape
+
+    rows = np.zeros(sensor_ids.shape[0], dtype=np.int64)
+    cols = np.zeros(sensor_ids.shape[0], dtype=np.int64)
+    mapped = np.zeros(sensor_ids.shape[0], dtype=bool)
+
+    if has_coords.any():
+        valid_coords = sensor_coords[has_coords]
+        utm_x = valid_coords["utm_x"].to_numpy(dtype=np.float64)
+        utm_y = valid_coords["utm_y"].to_numpy(dtype=np.float64)
+
+        valid_cols = ((utm_x - start_x) // cell).astype(np.int64)
+        valid_rows = (n_rows - 1 - ((utm_y - start_y) // cell)).astype(np.int64)
+
+        inside_grid = (
+            (valid_rows >= 0) & (valid_rows < n_rows) &
+            (valid_cols >= 0) & (valid_cols < n_cols)
+        )
+
+        valid_indices = np.flatnonzero(has_coords)[inside_grid]
+        rows[valid_indices] = valid_rows[inside_grid]
+        cols[valid_indices] = valid_cols[inside_grid]
+        mapped[valid_indices] = True
+
+    if (~mapped).any():
+        discarded_ids = sensor_ids[~mapped].tolist()
+        warnings.warn(
+            f"{warn_prefix}: discarding {len(discarded_ids)} sensor(s) outside the grid or without coordinates: {discarded_ids}",
+            stacklevel=2,
+        )
+
+    return rows, cols, mapped
 
 
 def find_grid_cell(ctx: dict, utm_x: float, utm_y: float, return_polygon: bool = False

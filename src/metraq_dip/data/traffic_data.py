@@ -4,9 +4,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
-from metraq_dip.data.data import get_grid
 from metraq_dip.data.metraq_db import metraq_db
-from metraq_dip.tools.grid import find_grid_cell
+from metraq_dip.tools.grid import map_sensor_ids_to_grid
 
 
 def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
@@ -23,7 +22,8 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     :param sensor_ids:
     :return:
     """
-    h, w = grid_ctx.get("grid").shape
+    grid = grid_ctx.get("grid")
+    h, w = grid.shape
     m, t, s = data.shape
 
     df_sensors = pd.read_sql_query(text("SELECT id, utm_x, utm_y FROM traffic_sensors"), con=metraq_db.connection)
@@ -31,22 +31,20 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     if sensor_ids is None:
         sensor_ids = df_sensors["id"].to_numpy()
 
-    rows = np.zeros(s, dtype=np.int64)
-    cols = np.zeros(s, dtype=np.int64)
+    sensor_ids = np.asarray(sensor_ids)
+    if sensor_ids.shape[0] != s:
+        raise ValueError(f"sensor_ids length ({sensor_ids.shape[0]}) does not match data sensors dimension ({s})")
 
-    for index, sensor_id in enumerate(sensor_ids):
-        utm_x, utm_y = df_sensors.loc[df_sensors['id'] == sensor_id][['utm_x', 'utm_y']].values[0]
-
-        try:
-            r, c = find_grid_cell(grid_ctx, utm_x, utm_y, return_polygon=False)
-        except IndexError:
-            continue
-
-        rows[index] = r
-        cols[index] = c
+    rows, cols, mapped = map_sensor_ids_to_grid(
+        grid_ctx,
+        df_sensors,
+        sensor_ids,
+        warn_prefix="Traffic to_grid",
+    )
 
     X_new = np.zeros((m, t, h, w), dtype=np.float32)
-    X_new[:, :, rows, cols] = data
+    if mapped.any():
+        X_new[:, :, rows[mapped], cols[mapped]] = data[:, :, mapped]
 
     return X_new
 
@@ -90,12 +88,26 @@ def get_traffic_data(*, start_date: datetime,
 
     return d, sensor_ids, time_index
 
+
+def get_traffic_grid(*, start_date: datetime,
+                     end_date: datetime,
+                     grid_ctx: dict):
+    data, sensor_ids, time_index = get_traffic_data(start_date=start_date, end_date=end_date)
+    gridded = to_grid(data=data, sensor_ids=sensor_ids, grid_ctx=grid_ctx)
+
+    if gridded.shape[0] < 2:
+        raise ValueError("Traffic gridded data must contain value and mask channels")
+
+    return gridded[:1], gridded[1:2], sensor_ids, time_index
+
+
 if __name__ == "__main__":
+    from metraq_dip.data.data import get_grid
+
     grid_ctx, _ = get_grid()
-    data, sensor_ids, time_index = get_traffic_data(start_date=datetime.strptime('2024-03-12 09:00:00', '%Y-%m-%d %H:%M:%S'),
-                        end_date=datetime.strptime('2024-03-13 08:00:00', '%Y-%m-%d %H:%M:%S'))
+    data, mask, sensor_ids, time_index = get_traffic_grid(start_date=datetime.strptime('2024-03-12 09:00:00', '%Y-%m-%d %H:%M:%S'),
+                        end_date=datetime.strptime('2024-03-13 08:00:00', '%Y-%m-%d %H:%M:%S'),
+                        grid_ctx=grid_ctx)
 
-    gridded_data = to_grid(data=data, sensor_ids=sensor_ids, grid_ctx=grid_ctx)
-
-    print(f"Length data: {len(data)}")
-    print(data.head(n=10))
+    print(f"Traffic grid shape: {data.shape}")
+    print(f"Traffic mask shape: {mask.shape}")

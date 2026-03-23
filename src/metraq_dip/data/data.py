@@ -9,7 +9,8 @@ from scipy.ndimage import distance_transform_edt
 from sqlalchemy import text
 
 from metraq_dip.data.metraq_db import metraq_db
-from metraq_dip.tools.grid import find_grid_cell, prepare_grid_context
+from metraq_dip.data.traffic_data import get_traffic_grid
+from metraq_dip.tools.grid import map_sensor_ids_to_grid, prepare_grid_context
 from metraq_dip.tools.random_tools import get_random_sensors
 
 
@@ -277,22 +278,26 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     :param sensor_ids:
     :return:
     """
-    h, w = grid_ctx.get("grid").shape
+    grid = grid_ctx.get("grid")
+    h, w = grid.shape
     m, t, s = data.shape
 
     df_sensors = pd.read_sql_query(text("SELECT id, utm_x, utm_y FROM merged_sensors"), con=metraq_db.connection)
 
-    rows = np.zeros(s, dtype=np.int64)
-    cols = np.zeros(s, dtype=np.int64)
+    sensor_ids = np.asarray(sensor_ids)
+    if sensor_ids.shape[0] != s:
+        raise ValueError(f"sensor_ids length ({sensor_ids.shape[0]}) does not match data sensors dimension ({s})")
 
-    for index, sensor_id in enumerate(sensor_ids):
-        utm_x, utm_y = df_sensors.loc[df_sensors['id'] == sensor_id][['utm_x', 'utm_y']].values[0]
-        r, c = find_grid_cell(grid_ctx, utm_x, utm_y, return_polygon=False)
-        rows[index] = r
-        cols[index] = c
+    rows, cols, mapped = map_sensor_ids_to_grid(
+        grid_ctx,
+        df_sensors,
+        sensor_ids,
+        warn_prefix="AQ to_grid",
+    )
 
     X_new = np.zeros((m, t, h, w), dtype=np.float32)
-    X_new[:, :, rows, cols] = data
+    if mapped.any():
+        X_new[:, :, rows[mapped], cols[mapped]] = data[:, :, mapped]
 
     return X_new
 
@@ -365,119 +370,96 @@ def generate_hour_of_day_coords(
     return np.stack([sin_h, cos_h], axis=0)  # (2,T,H,W)
 
 
-def collect_data(*, start_date: datetime,
-                 end_date: datetime,
-                 number_of_noise_channels: int,
-                 add_meteo: bool,
-                 add_time_channels: bool,
-                 add_coordinates: bool,
-                 add_distance_to_sensors: bool,
-                 number_of_val_sensors: int,
-                 pollutants: list[int],
-                 test_sensors: list[int] = None,
-                 normalize: bool = False
-                 ) -> dict:
-    """
-    Returns (data, val_data, sensors_mask, val_sensors_mask, sensor_ids, time_index)
+def _concatenate_parts(parts: list[np.ndarray]) -> np.ndarray | None:
+    if not parts:
+        return None
 
-    where data is (masked with sensors_mask):
-        [C, T, H, W] where
-        C:  - number_of_noise_channels [0-1] noise channels
-            - (7x2) meteo channels and masks
-            - (3) coordinates dimension, x, y, hour in time window
-            - (2) temporal dimension, sin(hour of day), cos(hour of day)
-        T: hours
-        H: rows
-        W: cols
-    """
+    return np.concatenate(parts, axis=0)
 
-    grid_ctx, sensor_ids = get_grid()
+
+def _build_sensor_mask(*, grid_ctx: dict, sensors: list[int] | np.ndarray) -> np.ndarray:
+    sensors = np.asarray(sensors, dtype=int)
     rows, cols = grid_ctx.get("grid").shape
 
+    if sensors.size == 0:
+        return np.zeros((1, 1, rows, cols), dtype=np.int32)
+
+    return to_grid(data=sensors[None, None, :], sensor_ids=sensors.tolist(), grid_ctx=grid_ctx).astype(int)
+
+
+def collect_ensemble_data(*,
+                          data: dict,
+                          number_of_noise_channels: int,
+                          number_of_val_sensors: int,
+                          add_distance_to_sensors: bool,
+                          normalize: bool = False) -> dict:
+    """
+    Build the split-dependent data for a single ensemble member from the static data collected by `collect_data`.
+    """
+    grid_ctx = data['grid_ctx']
+    sensor_ids = data['sensor_ids']
+    pollutants = data['pollutants']
+    test_sensors = data['test_sensors']
+    pd_data = data['pollutant_data']
+
     available_sensors = [sid for sid in sensor_ids if sid not in test_sensors]
-    train_sensors, val_sensors, _ = get_random_sensors(val_number=number_of_val_sensors, test_number=0,
-                                                       pollutants=pollutants, sensors=available_sensors)
+    train_sensors, val_sensors, _ = get_random_sensors(
+        val_number=number_of_val_sensors,
+        test_number=0,
+        pollutants=pollutants,
+        sensors=available_sensors,
+    )
 
     assert np.intersect1d(test_sensors, train_sensors).size == 0, "Sensors in test_sensors have leaked to train_sensors"
     assert np.intersect1d(val_sensors, train_sensors).size == 0, "Sensors in val_sensors have leaked to train_sensors"
     assert np.intersect1d(test_sensors, val_sensors).size == 0, "sensors in test_sensors have leaked to val_sensors"
 
-    train_mask = to_grid(data=np.array(train_sensors)[None, None, :], sensor_ids=train_sensors, grid_ctx=grid_ctx).astype(int)
-    val_mask = to_grid(data=np.array(val_sensors)[None, None, :], sensor_ids=val_sensors, grid_ctx=grid_ctx).astype(int)
-    test_mask = to_grid(data=np.array(test_sensors)[None, None, :], sensor_ids=test_sensors, grid_ctx=grid_ctx).astype(int)
+    train_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=train_sensors)
+    val_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=val_sensors)
+    test_mask = np.array(data['test_mask'], copy=True).astype(int)
 
     parts = []
 
-    # Get pollutants data
-    pd_data, time_index, s, minmax_map = generate_pollutant_magnitudes(start_date=start_date,
-                                                        end_date=end_date,
-                                                        pollutants=pollutants,
-                                                        grid_ctx=grid_ctx,
-                                                        sensor_ids=sensor_ids,
-                                                        normalize=False)
-
-    # Generate noise channels
-    hours = (end_date - start_date) // timedelta(hours=1) + 1
-    noise = generate_noise_channels(number_of_channels=number_of_noise_channels, hours=hours, rows=rows, cols=cols)
+    noise = generate_noise_channels(
+        number_of_channels=number_of_noise_channels,
+        hours=data['hours'],
+        rows=data['rows'],
+        cols=data['cols'],
+    )
     parts.append(noise)
 
-    # Generate coordinates channels
-    if add_coordinates:
-        coords = generate_dimensions(grid_ctx, hours)
-        parts.append(coords)
+    static_input_prefix = data.get('static_input_prefix')
+    if static_input_prefix is not None:
+        parts.append(static_input_prefix)
 
-    # Generate time channels
-    if add_time_channels:
-        times = generate_hour_of_day_coords(time_index, rows, cols)
-        parts.append(times)
-
-    # Generate distance channels
-    # TODO: There is a problem here if we dont have the train/val/test masks, this can't be calculated without the
-    #  validation and test masks...
     if add_distance_to_sensors:
-        distance = generate_distance_to_sensors(train_mask.astype(bool), hours, normalize="max")
+        distance = generate_distance_to_sensors(train_mask.astype(bool), data['hours'], normalize="max")
         parts.append(distance)
 
-    # Generate meteo channels
-    if add_meteo:
-        meteo, _, meteo_mags = generate_meteo_magnitudes(start_date=start_date, end_date=end_date, grid_ctx=grid_ctx, sensor_ids=sensor_ids)
-        parts.append(meteo)
+    static_input_suffix = data.get('static_input_suffix')
+    if static_input_suffix is not None:
+        parts.append(static_input_suffix)
 
-    # if normalize:
-    #     norm_data = []
-    #     for i, (mag_id, minmax) in enumerate(minmax_map.items()):
-    #         mean_val, std_val = minmax
-    #         mean_data = np.full_like(pd_data[i], mean_val, dtype=np.float32)
-    #         std_data = np.full_like(pd_data[i], std_val, dtype=np.float32)
-    #         norm_data.append(mean_data[None, ...])
-    #         norm_data.append(std_data[None, ...])
-    #
-    #     norm_data = np.concatenate(norm_data, axis=0)
-    #     parts.append(norm_data)
-
-    # This is the data used to train the model
     train_data = pd_data[:1, :, :, :] * train_mask.astype(bool)
     val_data = pd_data[:1, :, :, :] * val_mask.astype(bool)
-    test_data = pd_data[:1, :, :, :] * test_mask.astype(bool)
+    test_data = np.array(data['test_data'], copy=True)
 
+    minmax_map = None
     if normalize:
-        # Normalization for ALL data should be done using only train_data + val_data (known data)
-        # to avoid information leakage into the test set.
         norm_data = []
         input_data = []
         minmax_map = {}
         n_mask = np.squeeze(train_mask.astype(bool) | val_mask.astype(bool))
-        n_data = (train_data + val_data)
-        T = train_data.shape[2]
+        n_data = train_data + val_data
+        t_size = train_data.shape[2]
 
         for idx, mag_id in enumerate(pollutants):
-            # d = n_data[idx, :, n_mask]
-            d = n_data[idx, -1, n_mask]         # normalize to current time values (mean, std)
+            d = n_data[idx, -1, n_mask]
             mean = d.mean()
             std = d.std()
 
             if (not np.isfinite(std)) or std < 1e-6:
-                d_fb = n_data[idx, :, n_mask]   # fallback to full 24 h window
+                d_fb = n_data[idx, :, n_mask]
                 mean = d_fb.mean()
                 std = d_fb.std()
 
@@ -485,34 +467,34 @@ def collect_data(*, start_date: datetime,
             mean_data = np.full_like(train_data[idx], mean, dtype=np.float32)
             std_data = np.full_like(train_data[idx], std, dtype=np.float32)
             norm_data.append(mean_data[None, ...])
-            norm_data.append(std_data[None,  ...])
+            norm_data.append(std_data[None, ...])
 
-            train_data[idx, :, train_mask[idx, 0].astype(bool)] = (train_data[idx, :, train_mask[idx, 0].astype(bool)] - mean) / (std + 1e-6)
-            val_data[idx, :, val_mask[idx, 0].astype(bool)] = (val_data[idx, :, val_mask[idx, 0].astype(bool)] - mean) / (std + 1e-6)
-            test_data[idx, :, test_mask[idx, 0].astype(bool)] = (test_data[idx, :, test_mask[idx, 0].astype(bool)] - mean) / (std + 1e-6)
+            train_data[idx, :, train_mask[idx, 0].astype(bool)] = (
+                train_data[idx, :, train_mask[idx, 0].astype(bool)] - mean
+            ) / (std + 1e-6)
+            val_data[idx, :, val_mask[idx, 0].astype(bool)] = (
+                val_data[idx, :, val_mask[idx, 0].astype(bool)] - mean
+            ) / (std + 1e-6)
+            test_data[idx, :, test_mask[idx, 0].astype(bool)] = (
+                test_data[idx, :, test_mask[idx, 0].astype(bool)] - mean
+            ) / (std + 1e-6)
 
             input_data.append(train_data[idx][None, ...])
-            input_data.append(train_mask[idx][None, ...].astype(bool).astype(float).repeat(T, 1))
+            input_data.append(train_mask[idx][None, ...].astype(bool).astype(float).repeat(t_size, 1))
 
-        norm_data = np.concatenate(norm_data, axis=0)
-        parts.append(norm_data)
-        input_data = np.concatenate(input_data, axis=0)
-        parts.append(input_data)
+        parts.append(np.concatenate(norm_data, axis=0))
+        parts.append(np.concatenate(input_data, axis=0))
     else:
-        # This is the input pollutant data to the model
-        # it includes all the timestamps for the pollutant including the boolean mask
-        input_data = pd_data * train_mask.astype(bool)
-        parts.append(input_data)
+        parts.append(pd_data * train_mask.astype(bool))
 
-    # Here we concatenate all input channels
-    final_data =  np.concatenate(parts, axis=0)
+    final_data = np.concatenate(parts, axis=0)
 
     return {
         'input_data': final_data,
         'train_data': train_data,
         'val_data': val_data,
         'test_data': test_data,
-        'time_index': time_index.tolist(),
+        'time_index': data['time_index'],
         'train_mask': train_mask.astype(bool),
         'val_mask': val_mask.astype(bool),
         'test_mask': test_mask.astype(bool),
@@ -521,18 +503,95 @@ def collect_data(*, start_date: datetime,
     }
 
 
+def collect_data(*, start_date: datetime,
+                 end_date: datetime,
+                 add_meteo: bool,
+                 add_time_channels: bool,
+                 add_coordinates: bool,
+                 add_traffic_data: bool,
+                 pollutants: list[int],
+                 test_sensors: list[int] = None,
+                 ) -> dict:
+    """
+    Collect the static data for a whole training run.
+
+    This includes the raw pollutant grid, fixed test mask/data, and the input channels that do not depend on the
+    train/validation split. Use `collect_ensemble_data` to materialize the per-ensemble tensors.
+    """
+    test_sensors = [] if test_sensors is None else list(test_sensors)
+    grid_ctx, sensor_ids = get_grid()
+    rows, cols = grid_ctx.get("grid").shape
+    hours = (end_date - start_date) // timedelta(hours=1) + 1
+    test_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=test_sensors)
+
+    # Get pollutants data
+    pd_data, time_index, _, _ = generate_pollutant_magnitudes(start_date=start_date,
+                                                              end_date=end_date,
+                                                              pollutants=pollutants,
+                                                              grid_ctx=grid_ctx,
+                                                              sensor_ids=sensor_ids,
+                                                              normalize=False)
+
+    static_input_prefix = []
+    static_input_suffix = []
+
+    # Generate coordinates channels
+    if add_coordinates:
+        coords = generate_dimensions(grid_ctx, hours)
+        static_input_prefix.append(coords)
+
+    # Generate time channels
+    if add_time_channels:
+        times = generate_hour_of_day_coords(time_index, rows, cols)
+        static_input_prefix.append(times)
+
+    # Generate traffic channels
+    if add_traffic_data:
+        traffic_data, traffic_maks, _, _ = get_traffic_grid(start_date=start_date,
+                                                            end_date=end_date,
+                                                            grid_ctx=grid_ctx)
+        static_input_prefix.append(traffic_data)
+
+    # Generate meteo channels
+    if add_meteo:
+        meteo, _, meteo_mags = generate_meteo_magnitudes(start_date=start_date, end_date=end_date, grid_ctx=grid_ctx, sensor_ids=sensor_ids)
+        static_input_suffix.append(meteo)
+
+    test_data = pd_data[:1, :, :, :] * test_mask.astype(bool)
+
+    return {
+        'grid_ctx': grid_ctx,
+        'sensor_ids': sensor_ids,
+        'pollutants': pollutants,
+        'test_sensors': test_sensors,
+        'pollutant_data': pd_data,
+        'static_input_prefix': _concatenate_parts(static_input_prefix),
+        'static_input_suffix': _concatenate_parts(static_input_suffix),
+        'rows': rows,
+        'cols': cols,
+        'hours': hours,
+        'test_data': test_data,
+        'time_index': time_index.tolist(),
+        'test_mask': test_mask.astype(bool),
+    }
+
+
 
 
 if __name__ == "__main__":
-    d = collect_data(start_date=datetime.strptime('2024-03-12 09:00:00', '%Y-%m-%d %H:%M:%S'),
-                        end_date=datetime.strptime('2024-03-13 08:00:00', '%Y-%m-%d %H:%M:%S'),
-                        number_of_noise_channels=8,
-                        add_meteo=True,
-                        add_time_channels=True,
-                        add_coordinates=True,
-                        add_distance_to_sensors=True,
-                        pollutants=[7, 8],
-                        normalize=True
-                        )
+    static_data = collect_data(start_date=datetime.strptime('2024-03-12 09:00:00', '%Y-%m-%d %H:%M:%S'),
+                               end_date=datetime.strptime('2024-03-13 08:00:00', '%Y-%m-%d %H:%M:%S'),
+                               add_meteo=False,
+                               add_time_channels=False,
+                               add_coordinates=False,
+                               add_traffic_data=True,
+                               pollutants=[7],     # TODO: Add support for multiple pollutants
+                               test_sensors=[])
+
+    d = collect_ensemble_data(data=static_data,
+                              number_of_noise_channels=8,
+                              number_of_val_sensors=4,
+                              add_distance_to_sensors=True,
+                              normalize=True)
 
     pass

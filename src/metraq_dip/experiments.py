@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Traffic to_grid: discarding .*",
+    category=UserWarning,
+)
+
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime

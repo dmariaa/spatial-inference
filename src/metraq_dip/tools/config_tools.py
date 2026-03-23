@@ -84,6 +84,7 @@ class TrainerConfig(BaseModel):
     add_time_channels: bool = False
     add_coordinates: bool = False
     add_distance_to_sensors: bool = False
+    add_traffic_data: bool = False
     k_best_n: int | None = Field(default=None, gt=0)
 
     model: ModelConfig
