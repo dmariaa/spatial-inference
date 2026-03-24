@@ -58,7 +58,7 @@ def get_traffic_data(*, start_date: datetime,
     data_query = f"""SELECT
                         tr.sensor_id,
                         DATE_FORMAT(tr.entry_date, '%Y-%m-%d %H:00:00') AS hour,
-                        SUM(tr.traffic_intensity)  AS traffic_intensity,
+                        SUM(tr.traffic_intensity) / 4.0 AS traffic_intensity,
                         AVG(tr.avg_speed)          AS avg_speed,
                         AVG(tr.sensor_occupancy)   AS sensor_occupancy
                     FROM traffic_data tr

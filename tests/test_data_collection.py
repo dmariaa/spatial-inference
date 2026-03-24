@@ -184,3 +184,55 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
     np.testing.assert_array_equal(result["test_data"][0, :, 1, 1], np.array([4.0, 8.0], dtype=np.float32))
     np.testing.assert_array_equal(result["input_data"][11], expected_train_values)
     np.testing.assert_array_equal(result["input_data"][12], expected_train_availability)
+
+
+def test_collect_data_normalizes_traffic_over_valid_24h_values(monkeypatch):
+    time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
+    pollutant_data = _build_fake_pollutant_data()
+    traffic_data = np.array(
+        [
+            [[10.0, 20.0], [0.0, 40.0]],
+            [[30.0, 50.0], [0.0, 70.0]],
+        ],
+        dtype=np.float32,
+    )[None, ...]
+    traffic_mask = np.array(
+        [
+            [[True, True], [False, True]],
+            [[True, True], [False, True]],
+        ],
+        dtype=bool,
+    )[None, ...]
+
+    monkeypatch.setattr(data_module, "get_grid", lambda: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]))
+    monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
+    monkeypatch.setattr(
+        data_module,
+        "generate_pollutant_magnitudes",
+        lambda **kwargs: (pollutant_data, time_index, [10, 20, 30, 40], None),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "get_traffic_grid",
+        lambda **kwargs: (traffic_data.copy(), traffic_mask.copy(), None, None),
+    )
+
+    result = data_module.collect_data(
+        start_date=pd.Timestamp("2024-01-01 00:00:00"),
+        end_date=pd.Timestamp("2024-01-01 01:00:00"),
+        add_meteo=False,
+        add_time_channels=False,
+        add_coordinates=False,
+        add_traffic_data=True,
+        pollutants=[7],
+        test_sensors=[],
+        normalize=True,
+    )
+
+    expected = traffic_data.copy()
+    valid = traffic_mask.astype(bool)
+    mean = expected[valid].mean()
+    std = expected[valid].std()
+    expected[valid] = (expected[valid] - mean) / (std + 1e-6)
+
+    np.testing.assert_allclose(result["static_input_prefix"], expected)

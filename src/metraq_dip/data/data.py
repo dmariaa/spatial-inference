@@ -510,7 +510,8 @@ def collect_data(*, start_date: datetime,
                  add_coordinates: bool,
                  add_traffic_data: bool,
                  pollutants: list[int],
-                 test_sensors: list[int] = None,
+                  test_sensors: list[int] = None,
+                 normalize: bool = False,
                  ) -> dict:
     """
     Collect the static data for a whole training run.
@@ -547,9 +548,23 @@ def collect_data(*, start_date: datetime,
 
     # Generate traffic channels
     if add_traffic_data:
-        traffic_data, traffic_maks, _, _ = get_traffic_grid(start_date=start_date,
+        traffic_data, traffic_mask, _, _ = get_traffic_grid(start_date=start_date,
                                                             end_date=end_date,
                                                             grid_ctx=grid_ctx)
+        if normalize and traffic_mask is not None:
+            valid_traffic = traffic_data[traffic_mask.astype(bool)]
+            if valid_traffic.size:
+                traffic_mean = valid_traffic.mean()
+                traffic_std = valid_traffic.std()
+
+                if (not np.isfinite(traffic_std)) or traffic_std < 1e-6:
+                    traffic_std = 1.0
+
+                traffic_data = np.array(traffic_data, copy=True)
+                traffic_data[traffic_mask.astype(bool)] = (
+                    traffic_data[traffic_mask.astype(bool)] - traffic_mean
+                ) / (traffic_std + 1e-6)
+
         static_input_prefix.append(traffic_data)
 
     # Generate meteo channels
@@ -586,7 +601,8 @@ if __name__ == "__main__":
                                add_coordinates=False,
                                add_traffic_data=True,
                                pollutants=[7],     # TODO: Add support for multiple pollutants
-                               test_sensors=[])
+                               test_sensors=[],
+                               normalize=True)
 
     d = collect_ensemble_data(data=static_data,
                               number_of_noise_channels=8,

@@ -64,6 +64,7 @@ class DipTrainer:
             add_traffic_data=self.config.get('add_traffic_data'),
             test_sensors=self.test_sensors,
             pollutants=self.pollutants,
+            normalize=self.config.get('normalize')
         )
 
     def _get_ensemble_data(self):
