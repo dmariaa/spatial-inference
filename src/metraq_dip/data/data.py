@@ -387,6 +387,69 @@ def _build_sensor_mask(*, grid_ctx: dict, sensors: list[int] | np.ndarray) -> np
     return to_grid(data=sensors[None, None, :], sensor_ids=sensors.tolist(), grid_ctx=grid_ctx).astype(int)
 
 
+def _compute_pollutant_normalization_stats(*,
+                                           pollutant_data: np.ndarray,
+                                           pollutants: list[int],
+                                           test_mask: np.ndarray) -> dict[int, tuple[float, float]]:
+    spatial_non_test_mask = ~np.squeeze(test_mask.astype(bool))
+    stats: dict[int, tuple[float, float]] = {}
+
+    for idx, mag_id in enumerate(pollutants):
+        value_idx = idx * 2
+        mask_idx = value_idx + 1
+
+        values = pollutant_data[value_idx].astype(np.float32)
+        availability = pollutant_data[mask_idx].astype(bool)
+        valid_mask = availability & spatial_non_test_mask[None, ...]
+
+        current_values = values[-1][valid_mask[-1]]
+        if current_values.size:
+            mean = current_values.mean()
+            std = current_values.std()
+        else:
+            mean = np.nan
+            std = np.nan
+
+        if (not np.isfinite(mean)) or (not np.isfinite(std)) or std < 1e-6:
+            fallback_values = values[valid_mask]
+            if fallback_values.size:
+                mean = fallback_values.mean()
+                std = fallback_values.std()
+            else:
+                mean = 0.0
+                std = 1.0
+
+        if (not np.isfinite(std)) or std < 1e-6:
+            std = 1.0
+        if not np.isfinite(mean):
+            mean = 0.0
+
+        stats[mag_id] = (float(mean), float(std))
+
+    return stats
+
+
+def _apply_pollutant_normalization(*,
+                                   pollutant_data: np.ndarray,
+                                   pollutants: list[int],
+                                   pollutant_norm_stats: dict[int, tuple[float, float]]) -> tuple[np.ndarray, np.ndarray]:
+    normalized_data = np.array(pollutant_data, copy=True)
+    norm_channels = []
+
+    for idx, mag_id in enumerate(pollutants):
+        value_idx = idx * 2
+        mean, std = pollutant_norm_stats[mag_id]
+
+        normalized_data[value_idx] = (normalized_data[value_idx] - mean) / (std + 1e-6)
+
+        mean_data = np.full_like(normalized_data[value_idx], mean, dtype=np.float32)
+        std_data = np.full_like(normalized_data[value_idx], std, dtype=np.float32)
+        norm_channels.append(mean_data[None, ...])
+        norm_channels.append(std_data[None, ...])
+
+    return normalized_data, _concatenate_parts(norm_channels)
+
+
 def collect_ensemble_data(*,
                           data: dict,
                           number_of_noise_channels: int,
@@ -398,15 +461,15 @@ def collect_ensemble_data(*,
     """
     grid_ctx = data['grid_ctx']
     sensor_ids = data['sensor_ids']
-    pollutants = data['pollutants']
     test_sensors = data['test_sensors']
-    pd_data = data['pollutant_data']
+    pollutant_input_data = data['pollutant_data']
+    pollutant_value_data = data['pollutant_value_data']
 
     available_sensors = [sid for sid in sensor_ids if sid not in test_sensors]
     train_sensors, val_sensors, _ = get_random_sensors(
         val_number=number_of_val_sensors,
         test_number=0,
-        pollutants=pollutants,
+        pollutants=data['pollutants'],
         sensors=available_sensors,
     )
 
@@ -440,52 +503,16 @@ def collect_ensemble_data(*,
     if static_input_suffix is not None:
         parts.append(static_input_suffix)
 
-    train_data = pd_data[:1, :, :, :] * train_mask.astype(bool)
-    val_data = pd_data[:1, :, :, :] * val_mask.astype(bool)
+    train_data = pollutant_value_data * train_mask.astype(bool)
+    val_data = pollutant_value_data * val_mask.astype(bool)
     test_data = np.array(data['test_data'], copy=True)
 
-    minmax_map = None
     if normalize:
-        norm_data = []
-        input_data = []
-        minmax_map = {}
-        n_mask = np.squeeze(train_mask.astype(bool) | val_mask.astype(bool))
-        n_data = train_data + val_data
-        t_size = train_data.shape[2]
+        pollutant_norm_channels = data.get('pollutant_norm_channels')
+        if pollutant_norm_channels is not None:
+            parts.append(pollutant_norm_channels)
 
-        for idx, mag_id in enumerate(pollutants):
-            d = n_data[idx, -1, n_mask]
-            mean = d.mean()
-            std = d.std()
-
-            if (not np.isfinite(std)) or std < 1e-6:
-                d_fb = n_data[idx, :, n_mask]
-                mean = d_fb.mean()
-                std = d_fb.std()
-
-            minmax_map[mag_id] = (mean, std)
-            mean_data = np.full_like(train_data[idx], mean, dtype=np.float32)
-            std_data = np.full_like(train_data[idx], std, dtype=np.float32)
-            norm_data.append(mean_data[None, ...])
-            norm_data.append(std_data[None, ...])
-
-            train_data[idx, :, train_mask[idx, 0].astype(bool)] = (
-                train_data[idx, :, train_mask[idx, 0].astype(bool)] - mean
-            ) / (std + 1e-6)
-            val_data[idx, :, val_mask[idx, 0].astype(bool)] = (
-                val_data[idx, :, val_mask[idx, 0].astype(bool)] - mean
-            ) / (std + 1e-6)
-            test_data[idx, :, test_mask[idx, 0].astype(bool)] = (
-                test_data[idx, :, test_mask[idx, 0].astype(bool)] - mean
-            ) / (std + 1e-6)
-
-            input_data.append(train_data[idx][None, ...])
-            input_data.append(train_mask[idx][None, ...].astype(bool).astype(float).repeat(t_size, 1))
-
-        parts.append(np.concatenate(norm_data, axis=0))
-        parts.append(np.concatenate(input_data, axis=0))
-    else:
-        parts.append(pd_data * train_mask.astype(bool))
+    parts.append(pollutant_input_data * train_mask.astype(bool))
 
     final_data = np.concatenate(parts, axis=0)
 
@@ -499,7 +526,7 @@ def collect_ensemble_data(*,
         'val_mask': val_mask.astype(bool),
         'test_mask': test_mask.astype(bool),
         'sensors': train_mask.astype(int) + val_mask.astype(int) + test_mask.astype(int),
-        'minmax_map': minmax_map
+        'minmax_map': dict(data.get('pollutant_norm_stats') or {}) if normalize else None
     }
 
 
@@ -510,7 +537,7 @@ def collect_data(*, start_date: datetime,
                  add_coordinates: bool,
                  add_traffic_data: bool,
                  pollutants: list[int],
-                  test_sensors: list[int] = None,
+                 test_sensors: list[int] = None,
                  normalize: bool = False,
                  ) -> dict:
     """
@@ -532,6 +559,20 @@ def collect_data(*, start_date: datetime,
                                                               grid_ctx=grid_ctx,
                                                               sensor_ids=sensor_ids,
                                                               normalize=False)
+    pollutant_norm_stats = None
+    pollutant_norm_channels = None
+    if normalize:
+        pollutant_norm_stats = _compute_pollutant_normalization_stats(
+            pollutant_data=pd_data,
+            pollutants=pollutants,
+            test_mask=test_mask,
+        )
+        pd_data, pollutant_norm_channels = _apply_pollutant_normalization(
+            pollutant_data=pd_data,
+            pollutants=pollutants,
+            pollutant_norm_stats=pollutant_norm_stats,
+        )
+    pollutant_value_data = np.array(pd_data[::2], copy=True)
 
     static_input_prefix = []
     static_input_suffix = []
@@ -572,7 +613,7 @@ def collect_data(*, start_date: datetime,
         meteo, _, meteo_mags = generate_meteo_magnitudes(start_date=start_date, end_date=end_date, grid_ctx=grid_ctx, sensor_ids=sensor_ids)
         static_input_suffix.append(meteo)
 
-    test_data = pd_data[:1, :, :, :] * test_mask.astype(bool)
+    test_data = pollutant_value_data * test_mask.astype(bool)
 
     return {
         'grid_ctx': grid_ctx,
@@ -580,6 +621,8 @@ def collect_data(*, start_date: datetime,
         'pollutants': pollutants,
         'test_sensors': test_sensors,
         'pollutant_data': pd_data,
+        'pollutant_value_data': pollutant_value_data,
+        'pollutant_norm_channels': pollutant_norm_channels,
         'static_input_prefix': _concatenate_parts(static_input_prefix),
         'static_input_suffix': _concatenate_parts(static_input_suffix),
         'rows': rows,
@@ -588,9 +631,8 @@ def collect_data(*, start_date: datetime,
         'test_data': test_data,
         'time_index': time_index.tolist(),
         'test_mask': test_mask.astype(bool),
+        'pollutant_norm_stats': pollutant_norm_stats,
     }
-
-
 
 
 if __name__ == "__main__":
@@ -601,7 +643,7 @@ if __name__ == "__main__":
                                add_coordinates=False,
                                add_traffic_data=True,
                                pollutants=[7],     # TODO: Add support for multiple pollutants
-                               test_sensors=[],
+                               test_sensors=[28079024, 28079027, 28079054, 28079058],
                                normalize=True)
 
     d = collect_ensemble_data(data=static_data,

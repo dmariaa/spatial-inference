@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -28,11 +28,21 @@ def _normalize_start_hours(start_hours: list[int], *, deduplicate: bool) -> list
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    architecture: Literal["autoencoder", "unet"] = "autoencoder"
     base_channels: int = Field(gt=0)
     levels: int = Field(gt=0)
     preserve_time: bool
-    neural_upscale: bool
-    skip_connections: bool
+    learned_upsampling: bool
+    skip_connections: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_architecture_specific_fields(self) -> "ModelConfig":
+        if self.architecture == "autoencoder":
+            if self.skip_connections is None:
+                raise ValueError("model.skip_connections is required when model.architecture='autoencoder'.")
+        elif self.skip_connections is not None:
+            raise ValueError("model.skip_connections is only valid when model.architecture='autoencoder'.")
+        return self
 
 
 class SpreadTestGroupsConfig(BaseModel):

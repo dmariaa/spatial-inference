@@ -33,13 +33,13 @@ class DownSampleBlock(nn.Module):
         return x, skip
 
 class UpSampleBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, skip_channels, stride=(1, 2, 2), neural_upscale: bool = False):
+    def __init__(self, in_channels, out_channels, skip_channels, stride=(1, 2, 2), learned_upsampling: bool = False):
         super(UpSampleBlock, self).__init__()
-        self.neural_upscale = neural_upscale
+        self.learned_upsampling = learned_upsampling
 
         # TODO: check ConvTranspose3D vs Upsample
         # TODO: in ConvTranspose3D check if downgrade number of channels also
-        if neural_upscale:
+        if learned_upsampling:
             self.up_block = nn.ConvTranspose3d(in_channels, in_channels, kernel_size=stride, stride=stride)
         else:
             # self.up_block = nn.Upsample(scale_factor=stride, mode='trilinear', align_corners=False)
@@ -73,10 +73,10 @@ class UpSampleBlock(nn.Module):
 
 class Autoencoder3D(nn.Module):
     def __init__(self,  *, in_channels: int, out_channels: int, base_channels: int, levels: int = 3,
-                 preserve_time: bool = True, use_skip_connections: bool = False, neural_upscale: bool = False):
+                 preserve_time: bool = True, use_skip_connections: bool = False, learned_upsampling: bool = False):
         super(Autoencoder3D, self).__init__()
         self.use_skip_connections = use_skip_connections
-        self.neural_upscale = neural_upscale
+        self.learned_upsampling = learned_upsampling
         self.stride = (1, 2, 2) if preserve_time else (2, 2, 2)
 
         # --- Encoder ---
@@ -99,7 +99,7 @@ class Autoencoder3D(nn.Module):
         for i in reversed(range(levels)):
             in_ch = base_channels * (2 ** i)
             skip_ch = chs[i]
-            dec_blocks.append(UpSampleBlock(ch, in_ch, skip_ch, stride=self.stride, neural_upscale=self.neural_upscale))
+            dec_blocks.append(UpSampleBlock(ch, in_ch, skip_ch, stride=self.stride, learned_upsampling=self.learned_upsampling))
             ch = in_ch
 
         self.dec_blocks = nn.ModuleList(dec_blocks)
@@ -125,4 +125,3 @@ class Autoencoder3D(nn.Module):
         y = self.out_conv(x)
         y = self.out_act(y)
         return y
-

@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from metraq_dip.data.data import collect_data, collect_ensemble_data
 from metraq_dip.model.base_model_v2 import Autoencoder3D
+from metraq_dip.model.unet_model import UNet3D
 from metraq_dip.tools.tools import get_padding, get_interpolation_loss
 from metraq_dip.trainer.loss import get_losses
 
@@ -16,9 +17,9 @@ from metraq_dip.trainer.loss import get_losses
 # TODO: this was first pytorch, just take a look maybe it can work in GPU?
 #  reconsider the change to numpy
 def get_model_output(*, k_output: np.ndarray,
-                        k_val_mask: np.ndarray,
-                        k_val_data: np.ndarray,
-                        k_best_n: int = 10):
+                         k_val_mask: np.ndarray,
+                         k_val_data: np.ndarray,
+                         k_best_n: int = 10):
     k, c, t, h, w = k_output.shape
     k_output = k_output[:, 0]
     k_val_mask = k_val_mask[:, 0]
@@ -27,11 +28,9 @@ def get_model_output(*, k_output: np.ndarray,
     k_val_count = k_val_mask[0].astype(bool).sum()
     k_y_hat = k_output * k_val_mask
     k_l1_losses = np.sum(np.abs(k_y_hat - k_val_data), axis=(2, 3)) / k_val_count
-    k_mse_losses = np.sum((k_y_hat - k_val_data) ** 2, axis=(2, 3)) / k_val_count
-
-    k_best_l1_idx = np.argpartition(k_l1_losses, k_best_n, axis=1)[:, :k_best_n]
-    k_best_l1_losses = np.take_along_axis(k_l1_losses, k_best_l1_idx, axis=1)
-    k_best_mse_losses = np.take_along_axis(k_mse_losses, k_best_l1_idx, axis=1)
+    if k_best_n > k_l1_losses.shape[1]:
+        raise ValueError(f"k_best_n={k_best_n}")
+    k_best_l1_idx = np.argpartition(k_l1_losses, k_best_n - 1, axis=1)[:, :k_best_n]
 
     idx = k_best_l1_idx[:, :, None, None]
     k_best_output = np.mean(np.take_along_axis(k_output, idx, axis=1), axis=(1, 0))
@@ -47,6 +46,7 @@ class DipTrainer:
         self.start_date = self.end_date - self.date_window
         self.split = self.config.get('data_split', None)
         self.ensemble_size = self.config.get('ensemble_size')
+        self.k_best_n = self.config.get('k_best_n') or 10
 
         self.pollutants = configuration.get('pollutants', None)
         self.test_sensors = configuration.get("test_sensors", None)
@@ -92,8 +92,9 @@ class DipTrainer:
         levels = self.config['model']['levels']
         base_channels = self.config['model']['base_channels']
         preserve_time = self.config['model']['preserve_time']
-        skip_connections = self.config['model']['skip_connections']
-        neural_upscale = self.config['model']['neural_upscale']
+        skip_connections = self.config['model'].get('skip_connections', False)
+        learned_upsampling = self.config['model']['learned_upsampling']
+        architecture = self.config['model'].get('architecture', 'autoencoder').lower()
 
         self.padding = get_padding(self.x_data.shape,
                                    levels=levels,
@@ -101,14 +102,25 @@ class DipTrainer:
 
         in_channels = self.x_data.shape[1]
         out_channels = self.val_data.shape[1]
-        self.model = Autoencoder3D(in_channels=in_channels,
-                                   out_channels=out_channels,
-                              base_channels=base_channels,
-                              levels=levels,
-                              preserve_time=preserve_time,
-                              use_skip_connections=skip_connections,
-                              neural_upscale=neural_upscale
-                              ).to(self.device)
+        model_registry = {
+            'autoencoder': Autoencoder3D,
+            'unet': UNet3D,
+        }
+        if architecture not in model_registry:
+            valid_options = ", ".join(sorted(model_registry))
+            raise ValueError(f"Unknown model architecture '{architecture}'. Expected one of: {valid_options}")
+
+        model_class = model_registry[architecture]
+        model_kwargs = dict(in_channels=in_channels,
+                            out_channels=out_channels,
+                            base_channels=base_channels,
+                            levels=levels,
+                            preserve_time=preserve_time,
+                            learned_upsampling=learned_upsampling)
+        if architecture == 'autoencoder':
+            model_kwargs['use_skip_connections'] = skip_connections
+
+        self.model = model_class(**model_kwargs).to(self.device)
 
     def _get_optimizer(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config['lr'])
@@ -201,7 +213,7 @@ class DipTrainer:
         model_output, min_idx = get_model_output(k_output=k_output,
                                         k_val_mask=k_val_mask,
                                         k_val_data=k_val_data,
-                                        k_best_n=10)
+                                        k_best_n=self.k_best_n)
 
         test_data = k_test_data[0, 0, 0]
         test_mask = k_test_mask[0, 0, 0].astype(bool)
@@ -306,7 +318,7 @@ if __name__ == "__main__":
             'base_channels': 16,
             'levels': 3,
             'preserve_time': False,
-            'neural_upscale': False,
+            'learned_upsampling': False,
             'skip_connections': True
         },
     }

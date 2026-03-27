@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import numpy as np
@@ -200,14 +199,13 @@ def latex_hardest_cases_table(tbl: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--datadir", required=True, help="Directory created by compute_results_data.py")
-    parser.add_argument("--outdir", default="latex_tables", help="Directory for .tex table files")
-    args = parser.parse_args()
-
-    datadir = Path(args.datadir)
-    outdir = Path(args.outdir)
+def main(
+    *,
+    datadir: Path,
+    outdir: Path | None = None,
+) -> Path:
+    if outdir is None:
+        outdir = datadir / "latex_tables"
     outdir.mkdir(parents=True, exist_ok=True)
 
     overall = pd.read_csv(datadir / "overall_performance.csv")
@@ -260,8 +258,28 @@ def main() -> None:
     )
     write_text(outdir / "hardest_cases.tex", latex_hardest_cases_table(hardest))
 
-    print(f"Wrote LaTeX tables to: {outdir.resolve()}")
+    return outdir.resolve()
 
 
 if __name__ == "__main__":
-    main()
+    import click
+
+    @click.command()
+    @click.argument(
+        "datadir",
+        type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True, path_type=Path),
+    )
+    @click.option(
+        "--outdir",
+        type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+        default=None,
+        help="Directory for .tex table files. Defaults to DATADIR/latex_tables.",
+    )
+    def cli(datadir: Path, outdir: Path | None) -> None:
+        try:
+            output_dir = main(datadir=datadir, outdir=outdir)
+        except (FileNotFoundError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Wrote LaTeX tables to: {output_dir}")
+
+    cli()

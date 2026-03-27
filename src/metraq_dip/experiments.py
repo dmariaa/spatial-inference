@@ -141,6 +141,7 @@ def _run_single_experiment(
         "train_k_loss": trainer.dip_logger["train_loss"].detach().cpu().numpy(),
         "val_k_loss": trainer.dip_logger["val_loss"].detach().cpu().numpy(),
         "test_k_loss": trainer.dip_logger["test_loss"].detach().cpu().numpy(),
+        "minmax_map": trainer.data.get("minmax_map"),
     }
     experiment_file_name = f"{get_experiment_name(sensor_group_key, time_window_dt)}.npz"
     np.savez_compressed(os.path.join(experiment_output_folder, experiment_file_name), **experiment_data)

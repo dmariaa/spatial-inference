@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import numpy as np
 import yaml
 
 from metraq_dip.trainer.tools import load_training_session, get_session_results
@@ -56,22 +57,60 @@ def _format_metric(value: float) -> str:
     return f"{value:.6g}"
 
 
+def _denormalize_masked(data: np.ndarray, mask: np.ndarray, *, mean: float, std: float) -> np.ndarray:
+    restored = np.array(data, copy=True, dtype=np.float32)
+    valid_mask = np.asarray(mask, dtype=bool)
+    restored[valid_mask] = restored[valid_mask] * (std + 1e-6) + mean
+    restored[~valid_mask] = 0.0
+    return restored
+
+
+def _denormalize_output(data: np.ndarray, *, mean: float, std: float) -> np.ndarray:
+    restored = np.array(data, copy=True, dtype=np.float32)
+    return restored * (std + 1e-6) + mean
+
+
 @click.group()
 def cli() -> None:
     """metraq command line client."""
 
 
-@cli.command()
+@cli.command(name="run-experiments")
 @click.argument("session_folder",
                 type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True, path_type=Path))
-@click.option("--config-file", default=None,
-              type=click.Path(exists=True, file_okay=True, dir_okay=False, readable=True, path_type=Path),
-              help="Path to a configuration file.")
-def run_experiments(session_folder: Path, config_file: Path) -> None:
-    if config_file is None and not session_folder.exists():
-        raise click.ClickException(f"Session folder {session_folder} does not exist and no configuration provided.")
-    config = yaml.safe_load(config_file.read_text()) if config_file is not None else None
-    ex.run_experiments(config_base=config, output_folder=str(session_folder))
+def run_experiments(session_folder: Path) -> None:
+    session_data = load_training_session(str(session_folder))
+    configuration = session_data["configuration"]
+    experiment_file = session_data['experiment_files'][0]
+    experiment = np.load(experiment_file, allow_pickle=True)
+
+    if not configuration.get("normalize", False):
+        click.echo("Session is already in original space.")
+        return
+
+    if "minmax_map" not in experiment:
+        raise click.ClickException(
+            f"{experiment_file.name} does not contain minmax_map. Repair the session artifacts first."
+        )
+
+    pollutant_id = int(configuration["pollutants"][0])
+    minmax_map = experiment["minmax_map"].item()
+    if pollutant_id not in minmax_map:
+        raise click.ClickException(f"Missing normalization stats for pollutant {pollutant_id}.")
+
+    mean, std = minmax_map[pollutant_id]
+
+    train_data = _denormalize_masked(experiment['train_data'], experiment['train_mask'], mean=mean, std=std)
+    val_data = _denormalize_masked(experiment['val_data'], experiment['val_mask'], mean=mean, std=std)
+    test_data = _denormalize_masked(experiment['test_data'], experiment['test_mask'], mean=mean, std=std)
+    output = _denormalize_output(experiment['train_output'], mean=mean, std=std)
+    k_output = _denormalize_output(experiment['train_k_output'], mean=mean, std=std)
+
+    data = (train_data + val_data)[0]
+    mask = (experiment['train_mask'] + experiment['val_mask'])[0]
+    click.echo(f"Recovered original-space arrays for {experiment_file.name}")
+    click.echo(f"{'mean':>15}: {_format_metric(data[mask].mean())}")
+    click.echo(f"{'std':>15}: {_format_metric(data[mask].std())}")
 
 
 @cli.command()

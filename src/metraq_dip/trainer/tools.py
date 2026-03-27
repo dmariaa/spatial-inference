@@ -12,6 +12,9 @@ from metraq_dip.experiments import get_experiment_name
 
 def load_experiment_data(experiment_file: pathlib.Path):
     exp_data = np.load(experiment_file, allow_pickle=True)
+    minmax_map = None
+    if "minmax_map" in exp_data:
+        minmax_map = exp_data["minmax_map"].item()
 
     # old experiments can use 'x_data' and 'y_data' instead of 'train_data' and 'test_data'
     train_data = exp_data['x_data' if 'x_data' in exp_data else 'train_data'].astype(float)
@@ -42,6 +45,7 @@ def load_experiment_data(experiment_file: pathlib.Path):
         'train_k_output': exp_data['train_k_output'].astype(float),
         'train_k_loss': exp_data['train_k_loss'].astype(float),
         'val_k_loss': exp_data['val_k_loss'].astype(float),
+        'minmax_map': minmax_map,
         'data_stats': stats
     }
 
@@ -204,7 +208,7 @@ def get_experiment_result(experiment: dict):
 
 
 if __name__ == "__main__":
-    experiment_folder = "output/experiments/ESCOBAR/experiment_traffic_data"
+    experiment_folder = "output/experiments/norm/experiment_baseline"
     session = load_training_session(experiment_folder, load_experiments=True)
     results = session['results']
 

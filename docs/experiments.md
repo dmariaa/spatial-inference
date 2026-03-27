@@ -41,12 +41,13 @@ Per-experiment values such as `date`, `validation_sensors`, and `test_sensors` a
 | `add_time_channels` | `bool` | `false` | Adds time-derived channels. |
 | `add_coordinates` | `bool` | `false` | Adds coordinate channels. |
 | `add_distance_to_sensors` | `bool` | `false` or `true` | Adds distance-to-sensor channels. |
-| `model.base_channels` | `int` | `16` | Base width of the autoencoder. |
+| `model.architecture` | `string` | `autoencoder` or `unet` | Selects which DIP backbone is instantiated. |
+| `model.base_channels` | `int` | `16` | Base width of the model. |
 | `model.levels` | `int` | `3` | Number of encoder/decoder levels. |
 | `model.preserve_time` | `bool` | `false` | Controls how the model preserves the time axis. |
-| `model.neural_upscale` | `bool` | `false` | Enables learned upscaling when true. |
-| `model.skip_connections` | `bool` | `false` or `true` | Enables skip connections in the autoencoder. |
-| `k_best_n` | `int` (optional) | `3` or `10` | Present in some sample folders. Current `trainer_dip.py` uses a fixed internal selection count and does not currently read this value. |
+| `model.learned_upsampling` | `bool` | `false` | Enables learned upsampling when true. |
+| `model.skip_connections` | `bool` | `false` or `true` | Enables skip connections in the autoencoder. This key is only valid when `model.architecture = autoencoder`. |
+| `k_best_n` | `int` (optional) | `3` or `10` | Controls how many of the lowest-validation checkpoints are averaged when `trainer_dip.py` builds the final DIP output. If omitted, the trainer defaults to `10`. |
 
 ## `data.npz`
 

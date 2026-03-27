@@ -236,3 +236,67 @@ def test_collect_data_normalizes_traffic_over_valid_24h_values(monkeypatch):
     expected[valid] = (expected[valid] - mean) / (std + 1e-6)
 
     np.testing.assert_allclose(result["static_input_prefix"], expected)
+
+
+def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monkeypatch):
+    time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
+    pollutant_data = _build_fake_pollutant_data()
+
+    monkeypatch.setattr(data_module, "get_grid", lambda: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]))
+    monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
+    monkeypatch.setattr(
+        data_module,
+        "generate_pollutant_magnitudes",
+        lambda **kwargs: (pollutant_data, time_index, [10, 20, 30, 40], None),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "generate_noise_channels",
+        lambda **kwargs: np.zeros((kwargs["number_of_channels"], kwargs["hours"], kwargs["rows"], kwargs["cols"]), dtype=np.float32),
+    )
+
+    static_data = data_module.collect_data(
+        start_date=pd.Timestamp("2024-01-01 00:00:00"),
+        end_date=pd.Timestamp("2024-01-01 01:00:00"),
+        add_meteo=False,
+        add_time_channels=False,
+        add_coordinates=False,
+        add_traffic_data=False,
+        pollutants=[7],
+        test_sensors=[40],
+        normalize=True,
+    )
+
+    assert static_data["pollutant_norm_stats"] is not None
+    expected_stats = static_data["pollutant_norm_stats"][7]
+    expected_mean = np.array([5.0, 6.0, 7.0], dtype=np.float32).mean()
+    expected_std = np.array([5.0, 6.0, 7.0], dtype=np.float32).std()
+    expected_test_data = np.zeros((1, 2, 2, 2), dtype=np.float32)
+    expected_test_data[0, :, 1, 1] = (np.array([4.0, 8.0], dtype=np.float32) - expected_mean) / (expected_std + 1e-6)
+
+    assert static_data["pollutant_norm_channels"] is not None
+    np.testing.assert_allclose(expected_stats, (expected_mean, expected_std))
+    np.testing.assert_allclose(static_data["test_data"], expected_test_data)
+
+    monkeypatch.setattr(data_module, "get_random_sensors", lambda **kwargs: (np.array([10, 20]), np.array([30]), np.array([], dtype=int)))
+    result_one = data_module.collect_ensemble_data(
+        data=static_data,
+        number_of_noise_channels=1,
+        number_of_val_sensors=1,
+        add_distance_to_sensors=False,
+        normalize=True,
+    )
+
+    monkeypatch.setattr(data_module, "get_random_sensors", lambda **kwargs: (np.array([10, 30]), np.array([20]), np.array([], dtype=int)))
+    result_two = data_module.collect_ensemble_data(
+        data=static_data,
+        number_of_noise_channels=1,
+        number_of_val_sensors=1,
+        add_distance_to_sensors=False,
+        normalize=True,
+    )
+
+    assert result_one["minmax_map"][7] == expected_stats
+    assert result_two["minmax_map"][7] == expected_stats
+    np.testing.assert_allclose(result_one["test_data"], static_data["test_data"])
+    np.testing.assert_allclose(result_two["test_data"], static_data["test_data"])
