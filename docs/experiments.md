@@ -36,6 +36,7 @@ Per-experiment values such as `date`, `validation_sensors`, and `test_sensors` a
 | `epochs` | `int` | `250` | Training iterations per ensemble member. |
 | `ensemble_size` | `int` | `5` | Number of independent runs combined inside each experiment. |
 | `lr` | `float` | `0.01` | Adam learning rate. |
+| `optimization_loss` | `string` | `mae`, `mse`, or `rmse` | Loss used for backpropagation during DIP training. |
 | `normalize` | `bool` | `false` | Enables dataset normalization when true. |
 | `add_meteo` | `bool` | `false` | Adds meteorological input channels. |
 | `add_time_channels` | `bool` | `false` | Adds time-derived channels. |

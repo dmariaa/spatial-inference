@@ -7,9 +7,11 @@ def get_losses(y: torch.Tensor, y_hat: torch.Tensor, mask: torch.Tensor) -> dict
     diff = (y_hat - y) * mask
     count = mask.to(torch.bool).expand_as(diff).float().sum()
 
+    mse_loss = diff.pow(2).sum() / count
     losses = {
         'L1Loss': diff.abs().sum() / count,
-        'MSELoss': diff.pow(2).sum() / count,
+        'MSELoss': mse_loss,
+        'RMSELoss': torch.sqrt(mse_loss),
     }
 
     return losses
@@ -36,4 +38,3 @@ def get_metrics(y: torch.Tensor, y_hat: torch.Tensor, mask: torch.Tensor, pollut
             })
 
     return result
-

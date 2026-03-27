@@ -88,6 +88,7 @@ class TrainerConfig(BaseModel):
     epochs: int = Field(gt=0)
     ensemble_size: int = Field(gt=0)
     lr: float = Field(gt=0)
+    optimization_loss: Literal["mae", "mse", "rmse"] = "mae"
 
     normalize: bool = False
     add_meteo: bool = False

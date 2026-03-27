@@ -1,6 +1,6 @@
 # Experiment Results
 
-- Generated at: `2026-03-27 13:45:19`
+- Generated at: `2026-03-27 14:06:27`
 - Source root: `output/experiments`
 - Data used per session: `config.yaml`, `data.npz`, `results.csv`
 - Ignored by design: detailed `exp_*.npz` files

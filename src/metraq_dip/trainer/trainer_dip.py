@@ -47,12 +47,23 @@ class DipTrainer:
         self.split = self.config.get('data_split', None)
         self.ensemble_size = self.config.get('ensemble_size')
         self.k_best_n = self.config.get('k_best_n') or 10
+        self.optimization_loss = str(self.config.get('optimization_loss', 'mae')).lower()
 
         self.pollutants = configuration.get('pollutants', None)
         self.test_sensors = configuration.get("test_sensors", None)
         self.normalize = configuration.get('normalize', False)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.optimization_loss_map = {
+            'mae': 'L1Loss',
+            'mse': 'MSELoss',
+            'rmse': 'RMSELoss',
+        }
+        if self.optimization_loss not in self.optimization_loss_map:
+            valid_options = ", ".join(sorted(self.optimization_loss_map))
+            raise ValueError(
+                f"Unknown optimization loss '{self.optimization_loss}'. Expected one of: {valid_options}"
+            )
 
     def _get_static_data(self):
         self.static_data = collect_data(
@@ -137,7 +148,7 @@ class DipTrainer:
         return losses
 
     def __calculate_optimization_loss(self, losses):
-        loss = losses['L1Loss']
+        loss = losses[self.optimization_loss_map[self.optimization_loss]]
         return loss
 
     def __do_step(self):
@@ -188,7 +199,6 @@ class DipTrainer:
     def _do_optimization_loop(self):
         self._get_model()
         self.optimizer = self._get_optimizer()
-        self.loss = torch.nn.L1Loss()
 
         log: dict = {}
         self.step = 0
@@ -314,6 +324,7 @@ if __name__ == "__main__":
         'epochs': 250,
         'ensemble_size': 5,
         'lr': 1e-2,
+        'optimization_loss': 'mae',
         'model': {
             'base_channels': 16,
             'levels': 3,
