@@ -70,6 +70,14 @@ def _denormalize_output(data: np.ndarray, *, mean: float, std: float) -> np.ndar
     return restored * (std + 1e-6) + mean
 
 
+def _get_saved_normalization_stats(experiment: np.lib.npyio.NpzFile) -> dict[int, tuple[float, float]] | None:
+    if "normalization_stats" in experiment:
+        return experiment["normalization_stats"].item()
+    if "minmax_map" in experiment:
+        return experiment["minmax_map"].item()
+    return None
+
+
 @click.group()
 def cli() -> None:
     """metraq command line client."""
@@ -88,17 +96,17 @@ def run_experiments(session_folder: Path) -> None:
         click.echo("Session is already in original space.")
         return
 
-    if "minmax_map" not in experiment:
+    normalization_stats = _get_saved_normalization_stats(experiment)
+    if normalization_stats is None:
         raise click.ClickException(
-            f"{experiment_file.name} does not contain minmax_map. Repair the session artifacts first."
+            f"{experiment_file.name} does not contain normalization_stats. Repair the session artifacts first."
         )
 
     pollutant_id = int(configuration["pollutants"][0])
-    minmax_map = experiment["minmax_map"].item()
-    if pollutant_id not in minmax_map:
+    if pollutant_id not in normalization_stats:
         raise click.ClickException(f"Missing normalization stats for pollutant {pollutant_id}.")
 
-    mean, std = minmax_map[pollutant_id]
+    mean, std = normalization_stats[pollutant_id]
 
     train_data = _denormalize_masked(experiment['train_data'], experiment['train_mask'], mean=mean, std=std)
     val_data = _denormalize_masked(experiment['val_data'], experiment['val_mask'], mean=mean, std=std)

@@ -11,6 +11,7 @@ warnings.filterwarnings(
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,7 +20,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from metraq_dip.data.data import collect_data
 from metraq_dip.tools.config_tools import SessionConfig, load_session_config
 from metraq_dip.tools.random_tools import (
     get_all_time_windows,
@@ -28,7 +28,7 @@ from metraq_dip.tools.random_tools import (
     sensor_group_hash,
 )
 from metraq_dip.tools.tools import get_interpolation_loss
-from metraq_dip.trainer.dip_ensemble_optimizer import DipEnsembleOptimizer, reduce_surface_ensemble
+from metraq_dip.trainer.trainer_dip import DipTrainer
 
 
 def get_experiment_name(sensor_group_key: str, time_window: datetime) -> str:
@@ -97,198 +97,6 @@ def _ensure_base_files(
     return config_base, experiment_output_folder, test_sensors, time_windows, df
 
 
-def _denormalize_masked_channels(
-    data: np.ndarray,
-    mask: np.ndarray,
-    *,
-    pollutants: list[int],
-    normalization_stats: dict[int, tuple[float, float]],
-) -> np.ndarray:
-    restored = np.array(data, copy=True, dtype=np.float32)
-    mask_array = np.asarray(mask, dtype=bool)
-    mask_array = np.broadcast_to(mask_array, restored.shape)
-
-    for channel_idx, pollutant in enumerate(pollutants):
-        mean, std = normalization_stats[pollutant]
-        channel_mask = mask_array[channel_idx]
-        restored[channel_idx][channel_mask] = restored[channel_idx][channel_mask] * (std + 1e-6) + mean
-        restored[channel_idx][~channel_mask] = 0.0
-
-    return restored
-
-
-def _compute_masked_losses(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    mask: np.ndarray,
-) -> tuple[float, float]:
-    y_true_array = np.asarray(y_true, dtype=np.float32)
-    y_pred_array = np.asarray(y_pred, dtype=np.float32)
-    mask_array = np.broadcast_to(np.asarray(mask, dtype=bool), y_true_array.shape)
-    count = int(mask_array.sum())
-    if count == 0:
-        raise ValueError("mask must contain at least one observed cell")
-
-    diff = y_pred_array[mask_array] - y_true_array[mask_array]
-    l1_loss = float(np.abs(diff).sum() / count)
-    mse_loss = float(np.square(diff).sum() / count)
-    return l1_loss, mse_loss
-
-
-def _build_loss_history_cube(
-    *,
-    l1_history: np.ndarray,
-    mse_history: np.ndarray,
-    channels: int,
-) -> np.ndarray:
-    pair_history = np.stack([l1_history, mse_history], axis=-1).astype(np.float32)
-    return np.broadcast_to(pair_history[None, ...], (channels, pair_history.shape[0], 2)).copy()
-
-
-def _build_test_loss_history_cube(
-    *,
-    output_history: np.ndarray,
-    test_data_last: np.ndarray,
-    test_mask_last: np.ndarray,
-) -> np.ndarray:
-    epochs, channels, _, _ = output_history.shape
-    l1_history = np.zeros(epochs, dtype=np.float32)
-    mse_history = np.zeros(epochs, dtype=np.float32)
-
-    for epoch_idx, epoch_output in enumerate(output_history):
-        l1_loss, mse_loss = _compute_masked_losses(test_data_last, epoch_output, test_mask_last)
-        l1_history[epoch_idx] = l1_loss
-        mse_history[epoch_idx] = mse_loss
-
-    return _build_loss_history_cube(
-        l1_history=l1_history,
-        mse_history=mse_history,
-        channels=channels,
-    )
-
-
-def _format_surface_for_storage(surface: np.ndarray) -> np.ndarray:
-    surface_array = np.asarray(surface, dtype=np.float32)
-    if surface_array.ndim == 3 and surface_array.shape[0] == 1:
-        return surface_array[0]
-    return surface_array
-
-
-def _build_experiment_artifacts(
-    *,
-    static_data: dict[str, Any],
-    optimizer_artifacts: dict[str, Any],
-) -> dict[str, Any]:
-    member_artifacts = optimizer_artifacts["member_artifacts"]
-    ensemble_size = len(member_artifacts)
-    if ensemble_size == 0:
-        raise ValueError("optimizer did not produce any ensemble member artifacts")
-
-    channels = int(member_artifacts[0]["train_data"].shape[0])
-    test_data = np.repeat(
-        np.asarray(static_data["test_data"][:, -1:, ...], dtype=np.float32)[None, ...],
-        repeats=ensemble_size,
-        axis=0,
-    )
-    test_mask = np.repeat(
-        np.asarray(static_data["test_mask"], dtype=bool)[None, ...],
-        repeats=ensemble_size,
-        axis=0,
-    )
-
-    model_space_member_surfaces = [
-        np.asarray(member_artifact["surface_model_space"], dtype=np.float32)
-        for member_artifact in member_artifacts
-    ]
-    final_model_space_surface = reduce_surface_ensemble(
-        surfaces=model_space_member_surfaces,
-        reduction=optimizer_artifacts["surface_reducer"],
-    )
-
-    train_data = np.stack(
-        [np.asarray(member_artifact["train_data"][:, -1:, ...], dtype=np.float32) for member_artifact in member_artifacts],
-        axis=0,
-    )
-    val_data = np.stack(
-        [np.asarray(member_artifact["val_data"][:, -1:, ...], dtype=np.float32) for member_artifact in member_artifacts],
-        axis=0,
-    )
-    train_mask = np.stack(
-        [np.asarray(member_artifact["train_mask"], dtype=bool) for member_artifact in member_artifacts],
-        axis=0,
-    )
-    val_mask = np.stack(
-        [np.asarray(member_artifact["val_mask"], dtype=bool) for member_artifact in member_artifacts],
-        axis=0,
-    )
-    train_k_output = np.stack(
-        [np.moveaxis(np.asarray(member_artifact["output_history"], dtype=np.float32), 0, 1) for member_artifact in member_artifacts],
-        axis=0,
-    )
-    val_min_idx = np.stack(
-        [np.asarray(member_artifact["selected_epoch_indices"], dtype=np.int64) for member_artifact in member_artifacts],
-        axis=0,
-    )
-    train_k_loss = np.stack(
-        [
-            _build_loss_history_cube(
-                l1_history=np.asarray(member_artifact["train_l1_history"], dtype=np.float32),
-                mse_history=np.asarray(member_artifact["train_mse_history"], dtype=np.float32),
-                channels=channels,
-            )
-            for member_artifact in member_artifacts
-        ],
-        axis=0,
-    )
-    val_k_loss = np.stack(
-        [
-            _build_loss_history_cube(
-                l1_history=np.asarray(member_artifact["val_l1_history"], dtype=np.float32),
-                mse_history=np.asarray(member_artifact["val_mse_history"], dtype=np.float32),
-                channels=channels,
-            )
-            for member_artifact in member_artifacts
-        ],
-        axis=0,
-    )
-
-    test_data_last = np.asarray(static_data["test_data"][:, -1, ...], dtype=np.float32)
-    test_mask_last = np.asarray(static_data["test_mask"][:, 0, ...], dtype=bool)
-    test_k_loss = np.stack(
-        [
-            _build_test_loss_history_cube(
-                output_history=np.asarray(member_artifact["output_history"], dtype=np.float32),
-                test_data_last=test_data_last,
-                test_mask_last=test_mask_last,
-            )
-            for member_artifact in member_artifacts
-        ],
-        axis=0,
-    )
-
-    experiment_data = {
-        "train_data": train_data,
-        "val_data": val_data,
-        "test_data": test_data,
-        "train_mask": train_mask,
-        "val_mask": val_mask,
-        "test_mask": test_mask,
-        "train_output": _format_surface_for_storage(final_model_space_surface),
-        "train_output_real": _format_surface_for_storage(optimizer_artifacts["surface"]),
-        "val_min_idx": val_min_idx,
-        "train_k_output": train_k_output,
-        "train_k_loss": train_k_loss,
-        "val_k_loss": val_k_loss,
-        "test_k_loss": test_k_loss,
-    }
-
-    normalization_stats = optimizer_artifacts.get("normalization_stats")
-    if normalization_stats is not None:
-        experiment_data["normalization_stats"] = normalization_stats
-
-    return experiment_data
-
-
 def _run_single_experiment(
     *,
     config_base: dict[str, Any],
@@ -298,6 +106,10 @@ def _run_single_experiment(
     time_window_iso: str,
     disable_nested_tqdm: bool = False,
 ) -> dict[str, Any]:
+    # Keep nested trainer bars only in sequential mode.
+    import metraq_dip.trainer.trainer_dip as trainer_dip_module
+
+    trainer_dip_module.tqdm = partial(tqdm, disable=disable_nested_tqdm)
     time_window_dt = pd.to_datetime(time_window_iso).to_pydatetime()
 
     config = config_base.copy()
@@ -305,79 +117,40 @@ def _run_single_experiment(
     config["validation_sensors"] = 4
     config["test_sensors"] = test_sensor_group
 
-    date_window = pd.to_timedelta(config["hours"] - 1, unit="h")
-    static_data = collect_data(
-        start_date=time_window_dt - date_window,
-        end_date=time_window_dt,
-        add_meteo=bool(config.get("add_meteo")),
-        add_time_channels=bool(config.get("add_time_channels")),
-        add_coordinates=bool(config.get("add_coordinates")),
-        add_traffic_data=bool(config.get("add_traffic_data")),
-        pollutants=list(config["pollutants"]),
-        test_sensors=list(test_sensor_group),
-        normalize=bool(config.get("normalize")),
-    )
+    trainer = DipTrainer(configuration=config)
+    trainer()
+    result, output, min_idx_s = trainer.get_best_result()
 
-    optimizer = DipEnsembleOptimizer(
-        configuration=config,
-        static_data=static_data,
-        disable_tqdm=disable_nested_tqdm,
-    )
-    surface_real = np.asarray(optimizer.optimize(), dtype=np.float32)
-    optimizer_artifacts = optimizer.get_artifacts()
-    experiment_data = _build_experiment_artifacts(
-        static_data=static_data,
-        optimizer_artifacts=optimizer_artifacts,
-    )
+    x_data = (trainer.dip_logger["train_data"] + trainer.dip_logger["val_data"])[0, :, -1:, ...].detach().cpu().numpy()
+    y_data = trainer.dip_logger["test_data"][0, :, -1:, ...].detach().cpu().numpy()
+    train_mask = (trainer.dip_logger["train_mask"] + trainer.dip_logger["val_mask"])[0, :, -1:, ...].detach().cpu().numpy()
+    test_mask = trainer.dip_logger["test_mask"][0, :, -1:, ...].detach().cpu().numpy()
 
-    pollutants = list(config["pollutants"])
-    normalization_stats = optimizer_artifacts.get("normalization_stats")
-    train_data_first = np.asarray(experiment_data["train_data"][0], dtype=np.float32)
-    val_data_first = np.asarray(experiment_data["val_data"][0], dtype=np.float32)
-    test_data_first = np.asarray(experiment_data["test_data"][0], dtype=np.float32)
-    train_mask_first = np.asarray(experiment_data["train_mask"][0], dtype=bool)
-    val_mask_first = np.asarray(experiment_data["val_mask"][0], dtype=bool)
-    test_mask_first = np.asarray(experiment_data["test_mask"][0], dtype=bool)
+    interpolation_results = get_interpolation_loss(x_data, train_mask, y_data, test_mask, trainer.pollutants)
 
-    if bool(config.get("normalize")):
-        if normalization_stats is None:
-            raise ValueError("normalization_stats are required when normalize=True.")
-        x_data = _denormalize_masked_channels(
-            train_data_first + val_data_first,
-            train_mask_first | val_mask_first,
-            pollutants=pollutants,
-            normalization_stats=normalization_stats,
-        )
-        y_data = _denormalize_masked_channels(
-            test_data_first,
-            test_mask_first,
-            pollutants=pollutants,
-            normalization_stats=normalization_stats,
-        )
-    else:
-        x_data = train_data_first + val_data_first
-        y_data = test_data_first
-
-    test_target = y_data[:, -1, ...]
-    test_mask_last = np.asarray(test_mask_first[:, 0, ...], dtype=bool)
-    dip_l1_loss, dip_mse_loss = _compute_masked_losses(test_target, surface_real, test_mask_last)
-
-    interpolation_results = get_interpolation_loss(
-        x_data,
-        train_mask_first | val_mask_first,
-        y_data,
-        test_mask_first,
-        pollutants,
-    )
-
+    experiment_data = {
+        "train_data": trainer.dip_logger["train_data"].detach().cpu().numpy(),
+        "val_data": trainer.dip_logger["val_data"].detach().cpu().numpy(),
+        "test_data": trainer.dip_logger["test_data"].detach().cpu().numpy(),
+        "train_mask": trainer.dip_logger["train_mask"].detach().cpu().numpy(),
+        "val_mask": trainer.dip_logger["val_mask"].detach().cpu().numpy(),
+        "test_mask": trainer.dip_logger["test_mask"].detach().cpu().numpy(),
+        "train_output": output,
+        "val_min_idx": min_idx_s,
+        "train_k_output": trainer.dip_logger["train_output"].detach().cpu().numpy(),
+        "train_k_loss": trainer.dip_logger["train_loss"].detach().cpu().numpy(),
+        "val_k_loss": trainer.dip_logger["val_loss"].detach().cpu().numpy(),
+        "test_k_loss": trainer.dip_logger["test_loss"].detach().cpu().numpy(),
+        "minmax_map": trainer.data.get("minmax_map"),
+    }
     experiment_file_name = f"{get_experiment_name(sensor_group_key, time_window_dt)}.npz"
     np.savez_compressed(os.path.join(experiment_output_folder, experiment_file_name), **experiment_data)
 
     return {
         "sensor_group": sensor_group_key,
         "time_window": pd.Timestamp(time_window_iso),
-        "DIP_L1Loss": dip_l1_loss,
-        "DIP_MSELoss": dip_mse_loss,
+        "DIP_L1Loss": result[0]["loss"],
+        "DIP_MSELoss": result[1]["loss"],
         "KRG_L1Loss": interpolation_results[0]["loss"],
         "KRG_MSELoss": interpolation_results[1]["loss"],
         "IDW_L1Loss": interpolation_results[2]["loss"],
@@ -512,8 +285,8 @@ if __name__ == "__main__":
         help="Number of parallel workers to use. Defaults to CPU count.",
     )
     def cli(
-        config_file: Path,
-        max_workers: Optional[int],
+            config_file: Path,
+            max_workers: Optional[int],
     ) -> None:
         try:
             run_experiments(

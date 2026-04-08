@@ -296,7 +296,7 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
         normalize=True,
     )
 
-    assert result_one["minmax_map"][7] == expected_stats
-    assert result_two["minmax_map"][7] == expected_stats
+    assert result_one["normalization_stats"][7] == expected_stats
+    assert result_two["normalization_stats"][7] == expected_stats
     np.testing.assert_allclose(result_one["test_data"], static_data["test_data"])
     np.testing.assert_allclose(result_two["test_data"], static_data["test_data"])

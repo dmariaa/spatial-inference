@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 import numpy as np
-import torch
 from plotly import graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -193,6 +192,14 @@ def _denormalize_losses(losses: np.ndarray, *, std: float) -> np.ndarray:
     return restored
 
 
+def _get_saved_normalization_stats(experiment: np.lib.npyio.NpzFile) -> dict[int, tuple[float, float]] | None:
+    if "normalization_stats" in experiment:
+        return experiment["normalization_stats"].item()
+    if "minmax_map" in experiment:
+        return experiment["minmax_map"].item()
+    return None
+
+
 def _compute_masked_losses(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -> np.ndarray:
     valid_mask = np.asarray(mask, dtype=bool)
     count = int(valid_mask.sum())
@@ -256,8 +263,8 @@ def _build_baseline_plot_data(
     current_observed_mask = observed_mask[0, :, -1:, ...]
 
     y_hat = calculate_interpolations(
-        torch.as_tensor(current_observed_data, dtype=torch.float32),
-        torch.as_tensor(current_observed_mask, dtype=torch.bool),
+        current_observed_data,
+        current_observed_mask,
         interpolator,
     )[0, 0:1]
 
@@ -347,17 +354,17 @@ if __name__ == "__main__":
         val_min_idx = experiment['val_min_idx']
 
         if unnormalize and session_data["configuration"].get("normalize", False):
-            if "minmax_map" not in experiment:
+            normalization_stats = _get_saved_normalization_stats(experiment)
+            if normalization_stats is None:
                 raise click.ClickException(
-                    f"{experiment_file.name} does not contain minmax_map. Repair the session artifacts first."
+                    f"{experiment_file.name} does not contain normalization_stats. Repair the session artifacts first."
                 )
 
             pollutant_id = int(session_data["configuration"]["pollutants"][0])
-            minmax_map = experiment["minmax_map"].item()
-            if pollutant_id not in minmax_map:
+            if pollutant_id not in normalization_stats:
                 raise click.ClickException(f"Missing normalization stats for pollutant {pollutant_id}.")
 
-            mean, std = minmax_map[pollutant_id]
+            mean, std = normalization_stats[pollutant_id]
             train_data = _denormalize_masked(train_data, train_mask, mean=mean, std=std)
             val_data = _denormalize_masked(val_data, val_mask, mean=mean, std=std)
             test_data = _denormalize_masked(test_data, test_mask, mean=mean, std=std)
@@ -411,17 +418,17 @@ if __name__ == "__main__":
         train_output = experiment['train_output']
 
         if unnormalize and session_data["configuration"].get("normalize", False):
-            if "minmax_map" not in experiment:
+            normalization_stats = _get_saved_normalization_stats(experiment)
+            if normalization_stats is None:
                 raise click.ClickException(
-                    f"{experiment_file.name} does not contain minmax_map. Repair the session artifacts first."
+                    f"{experiment_file.name} does not contain normalization_stats. Repair the session artifacts first."
                 )
 
             pollutant_id = int(session_data["configuration"]["pollutants"][0])
-            minmax_map = experiment["minmax_map"].item()
-            if pollutant_id not in minmax_map:
+            if pollutant_id not in normalization_stats:
                 raise click.ClickException(f"Missing normalization stats for pollutant {pollutant_id}.")
 
-            mean, std = minmax_map[pollutant_id]
+            mean, std = normalization_stats[pollutant_id]
             train_data = _denormalize_masked(train_data, train_mask, mean=mean, std=std)
             val_data = _denormalize_masked(val_data, val_mask, mean=mean, std=std)
             test_data = _denormalize_masked(test_data, test_mask, mean=mean, std=std)

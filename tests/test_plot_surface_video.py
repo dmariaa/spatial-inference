@@ -44,7 +44,7 @@ def test_build_baseline_plot_data_uses_interpolated_surface_and_computes_losses(
 
     def fake_calculate_interpolations(x_data, x_mask, interpolator):
         assert interpolator is plot_surface_video.IdwInterpolator
-        observed_slices.append(x_data.numpy().copy())
+        observed_slices.append(x_data.copy())
         return surface
 
     monkeypatch.setattr(plot_surface_video, "calculate_interpolations", fake_calculate_interpolations)

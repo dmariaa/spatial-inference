@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from metraq_dip import experiments
+from metraq_dip import experiment_old
 from metraq_dip.trainer import tools as trainer_tools
 
 
@@ -41,15 +41,15 @@ def test_run_single_experiment_persists_minmax_map(monkeypatch, tmp_path):
         captured["file"] = file
         captured["kwargs"] = kwargs
 
-    monkeypatch.setattr(experiments, "DipTrainer", DummyTrainer)
+    monkeypatch.setattr(experiment_old, "DipTrainer", DummyTrainer)
     monkeypatch.setattr(
-        experiments,
+        experiment_old,
         "get_interpolation_loss",
         lambda *args, **kwargs: [{"loss": 0.1}, {"loss": 0.2}, {"loss": 0.3}, {"loss": 0.4}],
     )
-    monkeypatch.setattr(experiments.np, "savez_compressed", fake_savez_compressed)
+    monkeypatch.setattr(experiment_old.np, "savez_compressed", fake_savez_compressed)
 
-    experiments._run_single_experiment(
+    experiment_old._run_single_experiment(
         config_base={"pollutants": [7]},
         experiment_output_folder=str(tmp_path),
         test_sensor_group=[10],

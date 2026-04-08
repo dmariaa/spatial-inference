@@ -15,6 +15,9 @@ def load_experiment_data(experiment_file: pathlib.Path):
     minmax_map = None
     if "minmax_map" in exp_data:
         minmax_map = exp_data["minmax_map"].item()
+    normalization_stats = None
+    if "normalization_stats" in exp_data:
+        normalization_stats = exp_data["normalization_stats"].item()
 
     # old experiments can use 'x_data' and 'y_data' instead of 'train_data' and 'test_data'
     train_data = exp_data['x_data' if 'x_data' in exp_data else 'train_data'].astype(float)
@@ -45,6 +48,7 @@ def load_experiment_data(experiment_file: pathlib.Path):
         'train_k_output': exp_data['train_k_output'].astype(float),
         'train_k_loss': exp_data['train_k_loss'].astype(float),
         'val_k_loss': exp_data['val_k_loss'].astype(float),
+        'normalization_stats': normalization_stats,
         'minmax_map': minmax_map,
         'data_stats': stats
     }

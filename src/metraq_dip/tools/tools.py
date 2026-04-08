@@ -6,67 +6,101 @@ import numpy as np
 import torch
 
 from metraq_dip.tools.interpolator import Interpolator
-from metraq_dip.trainer.loss import get_metrics
 
 
-def calculate_interpolations(x_data: torch.Tensor, x_mask: torch.Tensor, interpolator_class: Interpolator):
-    y_hat_grid = np.zeros(x_data.shape)
-    channels, timestamps, height, width = x_data.shape
+def calculate_interpolations(
+    x_data: np.ndarray,
+    x_mask: np.ndarray,
+    interpolator_class: type[Interpolator],
+) -> np.ndarray:
+    x_data_array = np.asarray(x_data, dtype=np.float32)
+    x_mask_array = np.asarray(x_mask, dtype=bool)
+    if x_data_array.shape != x_mask_array.shape:
+        raise ValueError("x_data and x_mask must have the same shape")
+
+    y_hat_grid = np.zeros_like(x_data_array, dtype=np.float32)
+    channels, timestamps, _, _ = x_data_array.shape
 
     for c in range(channels):
         for t in range(timestamps):
-            f = x_data[c, t].numpy()
-            m = x_mask[c, t].numpy()
+            f = x_data_array[c, t]
+            m = x_mask_array[c, t]
 
-            # Get known data locations and values
-            data = np.array([[i, j, f[i, j]] for i in range(f.shape[0]) for j in range(f.shape[1]) if
-                    not np.isnan(f[i, j]) and m[i, j]], dtype=np.float64)
-            y, x, z = data[:, 0], data[:, 1], data[:, 2]
+            known_points = np.argwhere(~np.isnan(f) & m)
+            if known_points.size == 0:
+                continue
+
+            y = known_points[:, 0].astype(np.float64)
+            x = known_points[:, 1].astype(np.float64)
+            z = f[known_points[:, 0], known_points[:, 1]].astype(np.float64)
 
             # Generate interpolator
             interpolator = interpolator_class(x, y, z)
 
-            # Get unknown data locations
-            data_val = np.array([[i, j] for i in range(f.shape[0]) for j in range(f.shape[1]) if f[i, j] == 0.0],
-                            dtype=np.float64)
-            y_val, x_val = data_val[:, 0], data_val[:, 1]
-
-            # interpolate
-            z_val = interpolator(x_val, y_val, mode="points")
+            unknown_points = np.argwhere(~m)
 
             # Back to the grid
             y_hat_grid[c, t, y.astype(int), x.astype(int)] = z
-            y_hat_grid[c, t, y_val.astype(int), x_val.astype(int)] = z_val
+            if unknown_points.size != 0:
+                y_val = unknown_points[:, 0].astype(np.float64)
+                x_val = unknown_points[:, 1].astype(np.float64)
+                z_val = interpolator(x_val, y_val, mode="points")
+                y_hat_grid[c, t, y_val.astype(int), x_val.astype(int)] = z_val
 
     return y_hat_grid
 
 
-# def calculate_interpolation_loss(x: torch.Tensor,
-#                            x_val: torch.Tensor,
-#                            val_mask: torch.Tensor,
-#                            interpolator_class: Interpolator,
-#                            criterion: torch.nn.Module | list[torch.nn.Module]) -> float | list[float]:
-#
-#     y_hat_interp = calculate_interpolations(x, interpolator_class)
-#
-#     if isinstance(criterion, list):
-#         krig_loss = []
-#         for cr in criterion:
-#             krig_loss.append(cr(torch.Tensor(y_hat_interp) * val_mask, x_val * val_mask))
-#     else:
-#         krig_loss = criterion(torch.Tensor(y_hat_interp) * val_mask, x_val * val_mask)
-#
-#     return krig_loss
+def _get_numpy_metrics(
+    y: np.ndarray,
+    y_hat: np.ndarray,
+    mask: np.ndarray,
+    pollutants: dict[int, str] | list[int],
+) -> list[dict[str, Any]]:
+    y_array = np.asarray(y, dtype=np.float32)
+    y_hat_array = np.asarray(y_hat, dtype=np.float32)
+    mask_array = np.asarray(mask, dtype=bool)
+    if y_array.shape != y_hat_array.shape or y_array.shape != mask_array.shape:
+        raise ValueError("y, y_hat, and mask must have the same shape")
 
-def get_interpolation_loss(x: torch.Tensor, x_mask: torch.Tensor, y: torch.Tensor, y_mask: torch.Tensor,
-                           pollutants: dict[int, str]) -> list[Any]:
+    result: list[dict[str, Any]] = []
+    for channel_idx, pollutant in enumerate(pollutants):
+        channel_mask = mask_array[channel_idx]
+        count = int(channel_mask.sum())
+        if count == 0:
+            raise ValueError("mask must contain at least one observed cell per pollutant")
+
+        diff = y_hat_array[channel_idx][channel_mask] - y_array[channel_idx][channel_mask]
+        losses = {
+            "L1Loss": float(np.abs(diff).sum() / count),
+            "MSELoss": float(np.square(diff).sum() / count),
+        }
+
+        for loss_name, loss_value in losses.items():
+            result.append(
+                {
+                    "pollutant": pollutant,
+                    "criterion": loss_name,
+                    "loss": loss_value,
+                }
+            )
+
+    return result
+
+
+def get_interpolation_loss(
+    x: np.ndarray,
+    x_mask: np.ndarray,
+    y: np.ndarray,
+    y_mask: np.ndarray,
+    pollutants: dict[int, str] | list[int],
+) -> list[Any]:
     losses = []
 
     from metraq_dip.tools.interpolator import KrigingInterpolator, IdwInterpolator
 
     for interpolator in [KrigingInterpolator, IdwInterpolator]:
-        y_hat = torch.Tensor(calculate_interpolations(x, x_mask, interpolator))
-        loss = get_metrics(y, y_hat, y_mask, pollutants)
+        y_hat = calculate_interpolations(x, x_mask, interpolator)
+        loss = _get_numpy_metrics(y, y_hat, y_mask, pollutants)
 
         for l in loss:
             l['model'] = interpolator.__name__
@@ -109,4 +143,3 @@ def get_padding(shape, levels=3, preserve_time=True):
     w_pad = (w_div - w % w_div) % w_div
 
     return (0, w_pad, 0, h_pad, 0, d_pad)
-

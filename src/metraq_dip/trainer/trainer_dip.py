@@ -14,26 +14,24 @@ from metraq_dip.tools.tools import get_padding, get_interpolation_loss
 from metraq_dip.trainer.loss import get_losses
 
 
-# TODO: this was first pytorch, just take a look maybe it can work in GPU?
-#  reconsider the change to numpy
-def get_model_output(*, k_output: np.ndarray,
-                         k_val_mask: np.ndarray,
-                         k_val_data: np.ndarray,
-                         k_best_n: int = 10):
-    k, c, t, h, w = k_output.shape
+def get_model_output(*, k_output: torch.Tensor,
+                         k_val_mask: torch.Tensor,
+                         k_val_data: torch.Tensor,
+                         k_best_n: int = 10) -> tuple[torch.Tensor, torch.Tensor]:
+    _, _, _, h, w = k_output.shape
     k_output = k_output[:, 0]
     k_val_mask = k_val_mask[:, 0]
     k_val_data = k_val_data[:, 0]
 
-    k_val_count = k_val_mask[0].astype(bool).sum()
+    k_val_count = k_val_mask[0].bool().sum()
     k_y_hat = k_output * k_val_mask
-    k_l1_losses = np.sum(np.abs(k_y_hat - k_val_data), axis=(2, 3)) / k_val_count
+    k_l1_losses = torch.sum(torch.abs(k_y_hat - k_val_data), dim=(2, 3)) / k_val_count
     if k_best_n > k_l1_losses.shape[1]:
         raise ValueError(f"k_best_n={k_best_n}")
-    k_best_l1_idx = np.argpartition(k_l1_losses, k_best_n - 1, axis=1)[:, :k_best_n]
+    k_best_l1_idx = torch.topk(k_l1_losses, k_best_n, dim=1, largest=False, sorted=False).indices
 
-    idx = k_best_l1_idx[:, :, None, None]
-    k_best_output = np.mean(np.take_along_axis(k_output, idx, axis=1), axis=(1, 0))
+    gather_idx = k_best_l1_idx[:, :, None, None].expand(-1, -1, h, w)
+    k_best_output = k_output.gather(dim=1, index=gather_idx).mean(dim=(1, 0))
 
     return k_best_output, k_best_l1_idx
 
@@ -214,11 +212,11 @@ class DipTrainer:
                 pbar.set_postfix(**log)
 
     def get_best_result(self):
-        k_output = self.dip_logger['train_output'].detach().cpu().numpy()
-        k_val_mask = self.dip_logger['val_mask'].detach().cpu().numpy()
-        k_test_mask = self.dip_logger['test_mask'].detach().cpu().numpy()
-        k_val_data = self.dip_logger['val_data'].detach().cpu().numpy()
-        k_test_data = self.dip_logger['test_data'].detach().cpu().numpy()
+        k_output = self.dip_logger['train_output']
+        k_val_mask = self.dip_logger['val_mask']
+        k_test_mask = self.dip_logger['test_mask']
+        k_val_data = self.dip_logger['val_data']
+        k_test_data = self.dip_logger['test_data']
 
         model_output, min_idx = get_model_output(k_output=k_output,
                                         k_val_mask=k_val_mask,
@@ -226,43 +224,18 @@ class DipTrainer:
                                         k_best_n=self.k_best_n)
 
         test_data = k_test_data[0, 0, 0]
-        test_mask = k_test_mask[0, 0, 0].astype(bool)
+        test_mask = k_test_mask[0, 0, 0].bool()
         count = test_mask.sum()
         y_hat = model_output * test_mask
-        test_l1_loss = np.sum(np.abs(test_data - y_hat)) / count
-        test_mse_loss = np.sum((test_data - y_hat) ** 2) / count
+        test_l1_loss = torch.sum(torch.abs(test_data - y_hat)) / count
+        test_mse_loss = torch.sum((test_data - y_hat) ** 2) / count
 
         result = [
-            {'pollutant': self.pollutants[0], 'criterion': 'L1Loss_test', 'loss': test_l1_loss},
-            {'pollutant': self.pollutants[0], 'criterion': 'MSELoss_test', 'loss': test_mse_loss},
+            {'pollutant': self.pollutants[0], 'criterion': 'L1Loss_test', 'loss': test_l1_loss.item()},
+            {'pollutant': self.pollutants[0], 'criterion': 'MSELoss_test', 'loss': test_mse_loss.item()},
         ]
 
-        return result, model_output, min_idx
-
-    def get_best_result_old(self):
-        # Get min validation iterations for K runs
-        val_results = self.dip_logger['val_loss']
-        min_values, min_idx = val_results[..., 0].min(dim=2)
-
-        # Get model result for the K min iterations
-        train_output = self.dip_logger['train_output']
-        k, c, t, h, w = train_output.shape
-        index = min_idx[:, :, None, None, None].expand(-1, -1, 1, h, w)
-        out = train_output.gather(dim=2, index=index).squeeze(2)
-
-        # Average them to get the final "model" result
-        # y_hat_final = out.median(dim=0).values
-        y_hat_final = out.mean(dim=0)
-
-        # Calculate loss on test sensors, never used for optimization nor validation
-        final_test_loss = get_losses(self.test_data[:, :, -1, ...].detach().cpu(), y_hat_final[None, ...], self.test_mask.detach().cpu())
-
-        result = [
-            {'pollutant': self.pollutants[0], 'criterion': 'L1Loss_test', 'loss': final_test_loss['L1Loss'].item()},
-            {'pollutant': self.pollutants[0], 'criterion': 'MSELoss_test', 'loss': final_test_loss['MSELoss'].item()},
-        ]
-
-        return result, y_hat_final, min_idx
+        return result, model_output.detach().cpu().numpy(), min_idx.detach().cpu().numpy()
 
     def __call__(self):
         self.dip_logger = None
@@ -383,17 +356,21 @@ if __name__ == "__main__":
         result, output, min_idx_s = trainer.get_best_result()
 
         # gather interpolation results
-        x_data = (trainer.dip_logger['train_data'] + trainer.dip_logger['val_data'])[0, :, -1:, ...].detach().cpu()
-        y_data = trainer.dip_logger['test_data'][0, :, -1:, ...].detach().cpu()
-        test_mask = trainer.dip_logger['test_mask'][0, :, -1:, ...].detach().cpu()
+        x_data = (trainer.dip_logger['train_data'] + trainer.dip_logger['val_data'])[0, :, -1:, ...].detach().cpu().numpy()
+        y_data = trainer.dip_logger['test_data'][0, :, -1:, ...].detach().cpu().numpy()
+        train_mask = (trainer.dip_logger['train_mask'] + trainer.dip_logger['val_mask'])[0, :, -1:, ...].detach().cpu().numpy()
+        test_mask = trainer.dip_logger['test_mask'][0, :, -1:, ...].detach().cpu().numpy()
 
         # y_data = trainer.test_data[0, :, -1:, ...].detach().cpu()
         # test_mask = trainer.test_mask[0, :, -1:, ...].detach().cpu()
 
         interpolation_results = get_interpolation_loss(
             x_data,
+            train_mask,
             y_data,
-            test_mask, trainer.pollutants)
+            test_mask,
+            trainer.pollutants,
+        )
 
         return result, interpolation_results, output, trainer
 

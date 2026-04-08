@@ -526,6 +526,8 @@ def collect_ensemble_data(*,
         'val_mask': val_mask.astype(bool),
         'test_mask': test_mask.astype(bool),
         'sensors': train_mask.astype(int) + val_mask.astype(int) + test_mask.astype(int),
+        'pollutants': list(data['pollutants']),
+        'normalization_stats': dict(data.get('pollutant_norm_stats') or {}) if normalize else None,
         'minmax_map': dict(data.get('pollutant_norm_stats') or {}) if normalize else None
     }
 
