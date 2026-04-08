@@ -123,3 +123,4 @@ def test_run_experiments_writes_failure_log(monkeypatch, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Full tracebacks written to" in captured.out
+    assert "FAILED group-a" not in captured.out

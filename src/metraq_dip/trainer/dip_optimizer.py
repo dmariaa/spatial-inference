@@ -77,6 +77,25 @@ class DipOptimizer(SurfaceOptimizer):
         self.selected_epoch_indices: torch.Tensor | None = None
         self.artifacts: dict[str, torch.Tensor] | None = None
 
+    @staticmethod
+    def _expand_mask_to_match_data(
+        *,
+        mask: torch.Tensor,
+        data: torch.Tensor,
+        mask_name: str,
+    ) -> torch.Tensor:
+        if mask.ndim != data.ndim:
+            raise ValueError(f"{mask_name} and its data tensor must have the same number of dimensions")
+
+        expanded_shape: list[int] = []
+        for mask_dim, data_dim in zip(mask.shape, data.shape):
+            if mask_dim == data_dim or mask_dim == 1:
+                expanded_shape.append(data_dim)
+                continue
+            raise ValueError(f"{mask_name} is not broadcastable to the corresponding data shape")
+
+        return mask.expand(*expanded_shape)
+
     def _prepare_split_tensors(self) -> None:
         required_keys = ("input_data", "train_data", "val_data", "train_mask", "val_mask")
         missing_keys = [key for key in required_keys if key not in self.split_data]
@@ -110,10 +129,16 @@ class DipOptimizer(SurfaceOptimizer):
 
         if self.train_data.shape != self.val_data.shape:
             raise ValueError("train_data and val_data must have the same shape")
-        if self.train_data.shape != self.train_mask.shape:
-            raise ValueError("train_data and train_mask must have the same shape")
-        if self.val_data.shape != self.val_mask.shape:
-            raise ValueError("val_data and val_mask must have the same shape")
+        self.train_mask = self._expand_mask_to_match_data(
+            mask=self.train_mask,
+            data=self.train_data,
+            mask_name="train_mask",
+        )
+        self.val_mask = self._expand_mask_to_match_data(
+            mask=self.val_mask,
+            data=self.val_data,
+            mask_name="val_mask",
+        )
 
     def _initialize_artifacts(self) -> None:
         _, channels, _, height, width = self.train_data.shape

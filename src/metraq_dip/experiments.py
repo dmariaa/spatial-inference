@@ -429,21 +429,19 @@ def _build_failure_record(
     }
 
 
-def _write_failure_log(
+def _append_failure_log(
     *,
-    experiment_output_folder: str,
-    failures: list[dict[str, str]],
-) -> str:
-    failure_log_file = os.path.join(experiment_output_folder, "failures.log")
-    with open(failure_log_file, "w", encoding="utf-8") as handle:
-        for index, failure in enumerate(failures, start=1):
-            handle.write(f"[{index}] {failure['sensor_group']} @ {failure['time_window']}\n")
-            handle.write(f"{failure['message']}\n")
-            handle.write(failure["traceback"])
-            if not failure["traceback"].endswith("\n"):
-                handle.write("\n")
+    failure_log_file: str,
+    failure: dict[str, str],
+    failure_index: int,
+) -> None:
+    with open(failure_log_file, "a", encoding="utf-8") as handle:
+        handle.write(f"[{failure_index}] {failure['sensor_group']} @ {failure['time_window']}\n")
+        handle.write(f"{failure['message']}\n")
+        handle.write(failure["traceback"])
+        if not failure["traceback"].endswith("\n"):
             handle.write("\n")
-    return failure_log_file
+        handle.write("\n")
 
 
 def run_experiments(
@@ -489,6 +487,9 @@ def run_experiments(
         click.echo(f"Running {len(jobs)} experiments {mode}.")
 
     results_file = os.path.join(experiment_output_folder, "results.csv")
+    failure_log_file = os.path.join(experiment_output_folder, "failures.log")
+    if os.path.exists(failure_log_file):
+        os.remove(failure_log_file)
     failures: list[dict[str, str]] = []
 
     with tqdm(total=len(jobs), position=0, desc="Experiments") as pbar:
@@ -509,7 +510,11 @@ def run_experiments(
                             exc=exc,
                         )
                         failures.append(failure)
-                        tqdm.write(f"FAILED {sensor_group_key} @ {time_window_iso}: {failure['message']}")
+                        _append_failure_log(
+                            failure_log_file=failure_log_file,
+                            failure=failure,
+                            failure_index=len(failures),
+                        )
                     else:
                         _apply_row_result(df, row_result)
                         df.to_csv(results_file, index=False)
@@ -529,7 +534,11 @@ def run_experiments(
                         exc=exc,
                     )
                     failures.append(failure)
-                    tqdm.write(f"FAILED {sensor_group_key} @ {time_window_iso}: {failure['message']}")
+                    _append_failure_log(
+                        failure_log_file=failure_log_file,
+                        failure=failure,
+                        failure_index=len(failures),
+                    )
                 else:
                     _apply_row_result(df, row_result)
                     df.to_csv(results_file, index=False)
@@ -538,14 +547,8 @@ def run_experiments(
                     pbar.update(1)
 
     if failures:
-        failure_log_file = _write_failure_log(
-            experiment_output_folder=experiment_output_folder,
-            failures=failures,
-        )
         click.echo(f"{len(failures)} experiment(s) failed. Their rows remain with processed=False.")
         click.echo(f"Full tracebacks written to {failure_log_file}")
-        for failure in failures[:10]:
-            click.echo(f"- {failure['sensor_group']} @ {failure['time_window']}: {failure['message']}")
 
 
 if __name__ == "__main__":

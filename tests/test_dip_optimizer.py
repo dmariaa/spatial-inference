@@ -151,3 +151,50 @@ def test_dip_optimizer_returns_surface_in_real_values_when_normalized(monkeypatc
     assert np.allclose(surface, np.full((1, 2, 2), 10.0, dtype=np.float32))
     assert np.allclose(artifacts["surface"], np.full((1, 2, 2), 10.0, dtype=np.float32))
     assert np.allclose(artifacts["surface_model_space"], np.zeros((1, 2, 2), dtype=np.float32))
+
+
+def test_dip_optimizer_expands_broadcastable_masks(monkeypatch):
+    optimizer = DipOptimizer(
+        configuration={
+            "epochs": 1,
+            "lr": 1e-3,
+            "k_best_n": 1,
+            "normalize": False,
+            "pollutants": [7],
+            "model": {
+                "base_channels": 1,
+                "levels": 1,
+                "preserve_time": True,
+                "learned_upsampling": False,
+            },
+        },
+        split_data={
+            "input_data": np.zeros((1, 24, 2, 2), dtype=np.float32),
+            "train_data": np.zeros((1, 24, 2, 2), dtype=np.float32),
+            "val_data": np.zeros((1, 24, 2, 2), dtype=np.float32),
+            "train_mask": np.ones((1, 1, 2, 2), dtype=bool),
+            "val_mask": np.ones((1, 1, 2, 2), dtype=bool),
+            "pollutants": [7],
+        },
+        disable_tqdm=True,
+        device="cpu",
+    )
+
+    monkeypatch.setattr(optimizer, "_get_model", lambda: object())
+    monkeypatch.setattr(optimizer, "_get_optimizer", lambda: object())
+
+    def fake_run_epoch(*, step: int):
+        optimizer.artifacts["output_history"][step] = torch.zeros((1, 2, 2), dtype=torch.float32)
+        optimizer.artifacts["train_l1_history"][step] = 0.0
+        optimizer.artifacts["train_mse_history"][step] = 0.0
+        optimizer.artifacts["val_l1_history"][step] = 0.0
+        optimizer.artifacts["val_mse_history"][step] = 0.0
+        return {"train_mae": 0.0, "val_mae": 0.0}
+
+    monkeypatch.setattr(optimizer, "_run_epoch", fake_run_epoch)
+
+    optimizer.optimize()
+    artifacts = optimizer.get_artifacts()
+
+    assert artifacts["train_mask"].shape == (1, 24, 2, 2)
+    assert artifacts["val_mask"].shape == (1, 24, 2, 2)
