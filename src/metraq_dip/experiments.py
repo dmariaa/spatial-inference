@@ -9,6 +9,7 @@ warnings.filterwarnings(
 )
 
 import os
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -412,6 +413,39 @@ def _apply_row_result(df: pd.DataFrame, row_result: dict[str, Any]) -> None:
     ]
 
 
+def _build_failure_record(
+    *,
+    sensor_group_key: str,
+    time_window_iso: str,
+    exc: BaseException,
+) -> dict[str, str]:
+    message = f"{exc.__class__.__name__}: {exc}"
+    traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    return {
+        "sensor_group": sensor_group_key,
+        "time_window": time_window_iso,
+        "message": message,
+        "traceback": traceback_text,
+    }
+
+
+def _write_failure_log(
+    *,
+    experiment_output_folder: str,
+    failures: list[dict[str, str]],
+) -> str:
+    failure_log_file = os.path.join(experiment_output_folder, "failures.log")
+    with open(failure_log_file, "w", encoding="utf-8") as handle:
+        for index, failure in enumerate(failures, start=1):
+            handle.write(f"[{index}] {failure['sensor_group']} @ {failure['time_window']}\n")
+            handle.write(f"{failure['message']}\n")
+            handle.write(failure["traceback"])
+            if not failure["traceback"].endswith("\n"):
+                handle.write("\n")
+            handle.write("\n")
+    return failure_log_file
+
+
 def run_experiments(
     *,
     config_file: Path,
@@ -455,7 +489,7 @@ def run_experiments(
         click.echo(f"Running {len(jobs)} experiments {mode}.")
 
     results_file = os.path.join(experiment_output_folder, "results.csv")
-    failures: list[tuple[str, str, str]] = []
+    failures: list[dict[str, str]] = []
 
     with tqdm(total=len(jobs), position=0, desc="Experiments") as pbar:
         if run_in_parallel:
@@ -469,7 +503,13 @@ def run_experiments(
                     try:
                         row_result = future.result()
                     except Exception as exc:
-                        failures.append((sensor_group_key, time_window_iso, str(exc)))
+                        failure = _build_failure_record(
+                            sensor_group_key=sensor_group_key,
+                            time_window_iso=time_window_iso,
+                            exc=exc,
+                        )
+                        failures.append(failure)
+                        tqdm.write(f"FAILED {sensor_group_key} @ {time_window_iso}: {failure['message']}")
                     else:
                         _apply_row_result(df, row_result)
                         df.to_csv(results_file, index=False)
@@ -483,7 +523,13 @@ def run_experiments(
                 try:
                     row_result = _run_single_experiment(**job)
                 except Exception as exc:
-                    failures.append((sensor_group_key, time_window_iso, str(exc)))
+                    failure = _build_failure_record(
+                        sensor_group_key=sensor_group_key,
+                        time_window_iso=time_window_iso,
+                        exc=exc,
+                    )
+                    failures.append(failure)
+                    tqdm.write(f"FAILED {sensor_group_key} @ {time_window_iso}: {failure['message']}")
                 else:
                     _apply_row_result(df, row_result)
                     df.to_csv(results_file, index=False)
@@ -492,9 +538,14 @@ def run_experiments(
                     pbar.update(1)
 
     if failures:
+        failure_log_file = _write_failure_log(
+            experiment_output_folder=experiment_output_folder,
+            failures=failures,
+        )
         click.echo(f"{len(failures)} experiment(s) failed. Their rows remain with processed=False.")
-        for sensor_group_key, time_window_iso, message in failures[:10]:
-            click.echo(f"- {sensor_group_key} @ {time_window_iso}: {message}")
+        click.echo(f"Full tracebacks written to {failure_log_file}")
+        for failure in failures[:10]:
+            click.echo(f"- {failure['sensor_group']} @ {failure['time_window']}: {failure['message']}")
 
 
 if __name__ == "__main__":

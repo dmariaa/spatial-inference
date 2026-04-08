@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from metraq_dip import experiments
 
@@ -79,3 +80,46 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
     assert captured["kwargs"]["normalization_stats"] == {7: (10.0, 2.0)}
     np.testing.assert_allclose(captured["kwargs"]["train_output"], np.array([[1.25]], dtype=np.float32))
     np.testing.assert_allclose(captured["kwargs"]["train_output_real"], np.array([[12.5]], dtype=np.float32))
+
+
+def test_run_experiments_writes_failure_log(monkeypatch, tmp_path, capsys):
+    time_window = pd.Timestamp("2024-01-01T00:00:00")
+    df = pd.DataFrame(
+        {
+            "time_window": [time_window],
+            "sensor_group": pd.Series(["group-a"], dtype="string"),
+            "processed": [False],
+            "DIP_L1Loss": [0.0],
+            "DIP_MSELoss": [0.0],
+            "KRG_L1Loss": [0.0],
+            "KRG_MSELoss": [0.0],
+            "IDW_L1Loss": [0.0],
+            "IDW_MSELoss": [0.0],
+        }
+    )
+
+    monkeypatch.setattr(
+        experiments,
+        "_ensure_base_files",
+        lambda config_file: ({}, str(tmp_path), np.array([[10]]), np.array([time_window]), df),
+    )
+    monkeypatch.setattr(experiments, "sensor_group_hash", lambda group: "group-a")
+
+    def fake_run_single_experiment(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(experiments, "_run_single_experiment", fake_run_single_experiment)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("session: test\n", encoding="utf-8")
+
+    experiments.run_experiments(config_file=config_file, max_workers=1)
+
+    failure_log = tmp_path / "failures.log"
+    assert failure_log.exists()
+    failure_text = failure_log.read_text(encoding="utf-8")
+    assert "[1] group-a @ 2024-01-01T00:00:00" in failure_text
+    assert "RuntimeError: boom" in failure_text
+
+    captured = capsys.readouterr()
+    assert "Full tracebacks written to" in captured.out
