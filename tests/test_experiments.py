@@ -9,7 +9,7 @@ from metraq_dip import experiments
 def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_path):
     static_data = {
         "pollutants": [7],
-        "test_data": np.array([[[[1.25]]]], dtype=np.float32),
+        "test_data": np.full((1, 24, 1, 1), 1.25, dtype=np.float32),
         "test_mask": np.array([[[[True]]]], dtype=bool),
     }
 
@@ -22,10 +22,10 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
                 "normalization_stats": {7: (10.0, 2.0)},
                 "member_artifacts": [
                     {
-                        "train_data": np.array([[[[1.0]]]], dtype=np.float32),
-                        "val_data": np.array([[[[2.0]]]], dtype=np.float32),
-                        "train_mask": np.array([[[[True]]]], dtype=bool),
-                        "val_mask": np.array([[[[True]]]], dtype=bool),
+                        "train_data": np.full((1, 24, 1, 1), 1.0, dtype=np.float32),
+                        "val_data": np.full((1, 24, 1, 1), 2.0, dtype=np.float32),
+                        "train_mask": np.ones((1, 24, 1, 1), dtype=bool),
+                        "val_mask": np.ones((1, 24, 1, 1), dtype=bool),
                         "output_history": np.array([[[[1.25]]]], dtype=np.float32),
                         "train_l1_history": np.array([0.1], dtype=np.float32),
                         "train_mse_history": np.array([0.01], dtype=np.float32),
@@ -56,6 +56,8 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
         assert isinstance(x_mask, np.ndarray)
         assert isinstance(y_data, np.ndarray)
         assert isinstance(y_mask, np.ndarray)
+        assert x_data.shape == (1, 1, 1, 1)
+        assert x_mask.shape == (1, 1, 1, 1)
         return [{"loss": 0.1}, {"loss": 0.2}, {"loss": 0.3}, {"loss": 0.4}]
 
     monkeypatch.setattr(experiments, "get_interpolation_loss", fake_get_interpolation_loss)

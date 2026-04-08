@@ -215,11 +215,11 @@ def _build_experiment_artifacts(
         axis=0,
     )
     train_mask = np.stack(
-        [np.asarray(member_artifact["train_mask"], dtype=bool) for member_artifact in member_artifacts],
+        [np.asarray(member_artifact["train_mask"][:, -1:, ...], dtype=bool) for member_artifact in member_artifacts],
         axis=0,
     )
     val_mask = np.stack(
-        [np.asarray(member_artifact["val_mask"], dtype=bool) for member_artifact in member_artifacts],
+        [np.asarray(member_artifact["val_mask"][:, -1:, ...], dtype=bool) for member_artifact in member_artifacts],
         axis=0,
     )
     train_k_output = np.stack(
