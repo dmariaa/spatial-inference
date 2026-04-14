@@ -1,4 +1,3 @@
-import os.path
 import pathlib
 
 import click
@@ -7,7 +6,7 @@ import pandas as pd
 import yaml
 from scipy.stats import rankdata, friedmanchisquare
 
-from metraq_dip.experiments import get_experiment_name
+from metraq_dip.tools.results_stats import compute_results_data_stats, get_experiment_name
 
 
 def load_experiment_data(experiment_file: pathlib.Path):
@@ -26,15 +25,11 @@ def load_experiment_data(experiment_file: pathlib.Path):
     val_mask = exp_data['val_mask'].astype(bool)
     test_mask = exp_data['test_mask'].astype(bool)
 
-    mask = (train_mask | val_mask)
-    data = np.max(train_data, axis=0)[mask.any(axis=0)==1]
-    stats = {
-        "obs_mean": data.mean(),
-        "obs_median": np.median(data),
-        "obs_max": data.max(),
-        "obs_std": data.std(),
-        "obs_p90_p10": np.percentile(data, 90) - np.percentile(data, 10),
-    }
+    stats = compute_results_data_stats(
+        train_data=train_data,
+        train_mask=train_mask,
+        val_mask=val_mask,
+    )
 
     experiment_data = {
         'train_data': train_data,
@@ -210,26 +205,6 @@ def get_experiment_result(experiment: dict):
         best_l1_losses = l1_losses[best_l1_idx]
         pass
 
-
-if __name__ == "__main__":
-    experiment_folder = "output/experiments/norm/experiment_baseline"
-    session = load_training_session(experiment_folder, load_experiments=True)
-    results = session['results']
-
-    for experiment_key, experiment in session['experiments'].items():
-        _, sensor_group, time_window = experiment_key.split("_")
-        mask = (
-                (results['sensor_group'] == sensor_group) &
-                (results['time_window'] == time_window)
-        )
-
-        results.loc[mask, 'data_mean'] = experiment['data_stats']['obs_mean']
-        results.loc[mask, 'data_median'] = experiment['data_stats']['obs_median']
-        results.loc[mask, 'data_max'] = experiment['data_stats']['obs_max']
-        results.loc[mask, 'data_std'] = experiment['data_stats']['obs_std']
-        results.loc[mask, 'data_p90_p10'] = experiment['data_stats']['obs_p90_p10']
-
-    results.to_csv(os.path.join(experiment_folder, "results_with_stats.csv"), index=False)
 
 
 

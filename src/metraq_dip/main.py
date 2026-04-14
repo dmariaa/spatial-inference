@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import click
 import numpy as np
-import yaml
 
 from metraq_dip.trainer.tools import load_training_session, get_session_results
-import metraq_dip.experiments as ex
+
+PAPER_HISTNORM_CHOICES = ("count", "percent", "probability", "density", "probability density")
 
 def _truthy(value: object) -> bool:
     if isinstance(value, bool):
@@ -166,13 +165,98 @@ def results(session_folder: Path) -> None:
         click.echo(f"{model_name:>15}: {_format_metric(mean_rank)}")
 
 
-@cli.command()
+@cli.command(name="paper-assets")
 @click.argument("session_folder", type=click.Path(exists=True, file_okay=False, dir_okay=True,
                                                   readable=True, path_type=Path))
-@click.argument("output_folder", type=click.Path(file_okay=False, dir_okay=True, writable=True,
-                                                 path_type=Path), required=False)
-def plot(session_folder: Path, output_folder: Optional[Path, None] = None):
-    pass
+@click.option(
+    "--data-outdir",
+    type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+    default=None,
+    help="Directory for summary CSV/JSON data. Defaults to SESSION_FOLDER/derived_tables_data.",
+)
+@click.option(
+    "--plots-outdir",
+    type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+    default=None,
+    help="Directory for rendered plot files. Defaults to DATA_OUTDIR/plots.",
+)
+@click.option(
+    "--tables-outdir",
+    type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+    default=None,
+    help="Directory for LaTeX table files. Defaults to DATA_OUTDIR/latex_tables.",
+)
+@click.option(
+    "--hist-bins",
+    type=click.IntRange(min=1),
+    default=60,
+    show_default=True,
+    help="Number of bins for histogram plot data generation.",
+)
+@click.option(
+    "--histnorm",
+    type=click.Choice(PAPER_HISTNORM_CHOICES, case_sensitive=True),
+    default="count",
+    show_default=True,
+    help="Normalization mode for histogram plot data.",
+)
+@click.option(
+    "--plot-title",
+    default=None,
+    help="Optional title override for the loss histogram figure.",
+)
+@click.option(
+    "--static-format",
+    type=click.Choice(["png", "svg", "pdf"], case_sensitive=True),
+    default=None,
+    help="Optional static image format to export alongside HTML plots.",
+)
+@click.option(
+    "--html/--no-html",
+    default=True,
+    show_default=True,
+    help="Write the interactive HTML plot output.",
+)
+def paper_assets(
+    session_folder: Path,
+    data_outdir: Path | None,
+    plots_outdir: Path | None,
+    tables_outdir: Path | None,
+    hist_bins: int,
+    histnorm: str,
+    plot_title: str | None,
+    static_format: str | None,
+    html: bool,
+) -> None:
+    """Generate summary data, plots, and LaTeX tables for a paper."""
+    from metraq_dip.utils import compute_results_data, render_results_tables
+    from metraq_dip.utils import render_results_plots
+
+    try:
+        data_dir = compute_results_data.main(
+            experiment_folder=session_folder,
+            outdir=data_outdir,
+            hist_bins=hist_bins,
+            histnorm=histnorm,
+        )
+        written_plot_paths = render_results_plots.main(
+            datadir=data_dir,
+            outdir=plots_outdir,
+            title=plot_title,
+            static_format=static_format,
+            html=html,
+        )
+        tables_dir = render_results_tables.main(
+            datadir=data_dir,
+            outdir=tables_outdir,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Summary data: {data_dir}")
+    for path in written_plot_paths:
+        click.echo(f"Plot: {path}")
+    click.echo(f"LaTeX tables: {tables_dir}")
 
 if __name__ == "__main__":
     cli()

@@ -419,10 +419,18 @@ def plot_sensor_groups_map(
 
 
 if __name__=="__main__":
+    from metraq_dip.data.aq_backends import get_aq_backend
     from metraq_dip.tools.random_tools import get_spread_test_groups, sensor_group_hash
 
-    grid_ctx, sensor_ids = get_grid()
-    test_sensors, _ = get_spread_test_groups(n_groups=10, group_size=4, max_uses_per_sensor=2, magnitudes=[7])
+    aq_backend = get_aq_backend(dataset="metraq", backend="files")
+    grid_ctx, sensor_ids = get_grid(aq_backend=aq_backend)
+    test_sensors, _ = get_spread_test_groups(
+        n_groups=10,
+        group_size=4,
+        max_uses_per_sensor=2,
+        magnitudes=[7],
+        aq_backend=aq_backend,
+    )
     sensor_groups_list = []
 
     for sensor_group in test_sensors:

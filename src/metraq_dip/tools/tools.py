@@ -3,9 +3,22 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import torch
 
 from metraq_dip.tools.interpolator import Interpolator
+
+
+def is_truthy(value: Any) -> bool:
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
 
 
 def calculate_interpolations(

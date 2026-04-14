@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
+from metraq_dip.data.aq_backends import get_aq_backend_for_config
 from metraq_dip.data.data import collect_ensemble_data
 from metraq_dip.trainer.dip_optimizer import DipOptimizer
 from metraq_dip.trainer.optimizer_protocol import SurfaceOptimizer
@@ -41,6 +42,7 @@ class DipEnsembleOptimizer(SurfaceOptimizer):
     ):
         self.config = configuration
         self.static_data = static_data
+        self.aq_backend = get_aq_backend_for_config(configuration)
         self.device = device
         self.disable_tqdm = disable_tqdm
         self.optimizer_factory = optimizer_factory
@@ -65,6 +67,7 @@ class DipEnsembleOptimizer(SurfaceOptimizer):
             number_of_val_sensors=validation_sensors,
             add_distance_to_sensors=bool(self.config.get("add_distance_to_sensors")),
             normalize=bool(self.config.get("normalize")),
+            aq_backend=self.aq_backend,
         )
 
     def _create_optimizer(self, *, split_data: dict[str, Any]) -> SurfaceOptimizer:

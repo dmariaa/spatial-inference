@@ -6,39 +6,22 @@ import torch
 from numpy import ndarray
 from pandas import DatetimeIndex
 from scipy.ndimage import distance_transform_edt
-from sqlalchemy import text
 
-from metraq_dip.data.metraq_db import metraq_db
+from metraq_dip.data.aq_backends import AQBackend
 from metraq_dip.data.traffic_data import get_traffic_grid
 from metraq_dip.tools.grid import map_sensor_ids_to_grid, prepare_grid_context
 from metraq_dip.tools.random_tools import get_random_sensors
 
 
-def get_max_min(magnitudes: list[int]):
-    query = (
-        "SELECT id, min_value, max_value "
-        f"FROM aq_magnitudes WHERE id IN ({','.join(map(str, magnitudes))})"
-    )
-
-    rows = metraq_db.execute(query)
-    minmax_map = {row[0]: (row[1], row[2]) for row in rows}
-
-    # return min_values, max_values
-    return minmax_map
+def get_max_min(magnitudes: list[int], *, aq_backend: AQBackend):
+    return aq_backend.get_magnitude_bounds(magnitudes)
 
 class Normalizer:
-    def __init__(self, pollutants: list [int]):
+    def __init__(self, pollutants: list [int], *, aq_backend: AQBackend):
         self.pollutants = pollutants
-
-        query = (
-            "SELECT id, min_value, max_value "
-            f"FROM aq_magnitudes WHERE id IN ({','.join(map(str, pollutants))})"
-        )
-        rows = metraq_db.execute(query)
-
-        # Map by id so ordering matches `pollutants`
-        min_map = {row[0]: row[1] for row in rows}
-        max_map = {row[0]: row[2] for row in rows}
+        bounds = aq_backend.get_magnitude_bounds(pollutants)
+        min_map = {magnitude_id: bounds[magnitude_id][0] for magnitude_id in pollutants}
+        max_map = {magnitude_id: bounds[magnitude_id][1] for magnitude_id in pollutants}
 
         self.min_values = np.array([min_map[p] for p in pollutants], dtype=np.float32)[:, None, None, None]
         self.max_values = np.array([max_map[p] for p in pollutants], dtype=np.float32)[:, None, None, None]
@@ -63,15 +46,12 @@ class MinMaxNormalizer:
 
 
 class TensorNormalizer:
-    def __init__(self, pollutants: list[int], device: str = 'cpu'):
+    def __init__(self, pollutants: list[int], *, aq_backend: AQBackend, device: str = 'cpu'):
         self.pollutants = pollutants
         self.device = device
-        
-        query = f'SELECT id, min_value, max_value FROM aq_magnitudes WHERE id in ({",".join([str(p) for p in pollutants])})'
-        rows = metraq_db.execute(query)
-        
-        min_map = {row[0]: row[1] for row in rows}
-        max_map = {row[0]: row[2] for row in rows}
+        bounds = aq_backend.get_magnitude_bounds(pollutants)
+        min_map = {magnitude_id: bounds[magnitude_id][0] for magnitude_id in pollutants}
+        max_map = {magnitude_id: bounds[magnitude_id][1] for magnitude_id in pollutants}
         
         min_vals = [min_map[p] for p in pollutants]
         max_vals = [max_map[p] for p in pollutants]
@@ -86,16 +66,8 @@ class TensorNormalizer:
     def inverse(self, data: torch.Tensor):
         return data * (self.max_values - self.min_values) + self.min_values
 
-def get_grid():
-    query = R"""
-            SELECT id,
-                   name,
-                   latitude,
-                   longitude
-            FROM merged_sensors
-            WHERE id IN (SELECT DISTINCT sensor_id FROM MAD_merged_aq_data)
-            """
-    df = pd.read_sql_query(text(query), con=metraq_db.connection)
+def get_grid(*, pollutants: list[int] | None = None, aq_backend: AQBackend):
+    df = aq_backend.get_sensors(magnitudes=pollutants)
 
     # Build a grid with 1000 m cells and 1000 m margin around sensors
     ctx = prepare_grid_context(df, cell_size_m=1000, margin_m_x=3000, margin_m_y=2000)
@@ -106,22 +78,14 @@ def get_grid():
 
 def get_data(*, start_date: datetime,
              end_date: datetime,
-             magnitudes: list):
+             magnitudes: list,
+             aq_backend: AQBackend):
     # returns data between (inclusive) both dates
-    data_query = """
-                 SELECT md.sensor_id,
-                        md.entry_date,
-                        md.magnitude_id,
-                        md.value
-                 FROM MAD_merged_aq_data md
-                 WHERE is_valid
-                   AND entry_date >= :start_date \
-                   AND entry_date <= :end_date \
-                 """
-
-    data_query += f" AND magnitude_id IN ({','.join([str(p) for p in magnitudes])})"
-    params: dict = { 'start_date': start_date, 'end_date': end_date }
-    df: pd.DataFrame = pd.read_sql_query(text(data_query), con=metraq_db.connection, params=params, parse_dates=['entry_date'])
+    df = aq_backend.get_measurements(
+        start_date=start_date,
+        end_date=end_date,
+        magnitudes=magnitudes,
+    )
     time_index = pd.date_range(start=start_date, end=end_date, freq='h')
 
     return df, time_index
@@ -131,7 +95,8 @@ def get_magnitudes_data(*, start_date: datetime,
                         end_date: datetime,
                         magnitudes:list,
                         sensor_ids: list[int] = None,
-                        normalize: bool = False) -> tuple[dict, dict, DatetimeIndex, list, dict]:
+                        normalize: bool = False,
+                        aq_backend: AQBackend) -> tuple[dict, dict, DatetimeIndex, list, dict]:
     """
     Returns values, masks, time_index where:
         values dict(mag_id: values(t, s)) where mag_id is the magnitude id (for all the magnitudes requested) and
@@ -143,7 +108,7 @@ def get_magnitudes_data(*, start_date: datetime,
              (timestamp, sensor) combination that doesn't have a value and 1 elsewhere. It can be used to distinguish
              valid zero values (mask=1) from missing ones (mask=0).
     """
-    df, time_index = get_data(start_date=start_date, end_date=end_date, magnitudes=magnitudes)
+    df, time_index = get_data(start_date=start_date, end_date=end_date, magnitudes=magnitudes, aq_backend=aq_backend)
     values: dict[int, np.ndarray] = {}
     masks: dict[int, np.ndarray] = {}
 
@@ -187,12 +152,14 @@ def generate_pollutant_magnitudes(start_date: datetime,
                                   pollutants: list[int],
                                   grid_ctx: dict,
                                   sensor_ids: list[int],
-                                  normalize: bool) -> tuple[np.ndarray,DatetimeIndex,list,dict]:
+                                  normalize: bool,
+                                  aq_backend: AQBackend) -> tuple[np.ndarray,DatetimeIndex,list,dict]:
     values, masks, time_index, sensor_ids, minmax_map = get_magnitudes_data(start_date=start_date,
                                                     end_date=end_date,
                                                     magnitudes=pollutants,
                                                     sensor_ids=sensor_ids,
-                                                    normalize=normalize)
+                                                    normalize=normalize,
+                                                    aq_backend=aq_backend)
 
     chans = []
     for mag_id in pollutants:
@@ -202,7 +169,7 @@ def generate_pollutant_magnitudes(start_date: datetime,
         chans.append(m[None, ...])
 
     x = np.concatenate(chans, axis=0)
-    x_grid = to_grid(data=x, sensor_ids=sensor_ids, grid_ctx=grid_ctx)
+    x_grid = to_grid(data=x, sensor_ids=sensor_ids, grid_ctx=grid_ctx, aq_backend=aq_backend)
 
     return x_grid, time_index, sensor_ids, minmax_map
 
@@ -215,18 +182,21 @@ def generate_noise_channels(number_of_channels: int, hours: int, rows: int, cols
 def generate_meteo_magnitudes(*, start_date: datetime,
                               end_date: datetime,
                               grid_ctx: dict,
-                              sensor_ids: list[int]) -> tuple[ndarray, DatetimeIndex, list]:
+                              sensor_ids: list[int],
+                              aq_backend: AQBackend) -> tuple[ndarray, DatetimeIndex, list]:
     wind_magnitudes = [81, 82]
     meteo_magnitudes = [83, 86, 87, 88, 89]
 
     values, masks, time_index, _, _ = get_magnitudes_data(start_date=start_date,
                                                        end_date=end_date,
                                                        magnitudes=meteo_magnitudes,
-                                                       normalize=False
+                                                       sensor_ids=sensor_ids,
+                                                       normalize=False,
+                                                       aq_backend=aq_backend
                                                        )
 
     # transform wind speed + direction to u, v vector
-    df, _ = get_data(start_date=start_date, end_date=end_date, magnitudes=wind_magnitudes)
+    df, _ = get_data(start_date=start_date, end_date=end_date, magnitudes=wind_magnitudes, aq_backend=aq_backend)
     df_wind = df[df['magnitude_id'].isin(wind_magnitudes)]
     df_wide = df_wind.pivot_table(
         index=["sensor_id", "entry_date"],
@@ -260,12 +230,12 @@ def generate_meteo_magnitudes(*, start_date: datetime,
         chans.append(m[None, ...])
 
     X = np.concatenate(chans, axis=0)
-    X_grid = to_grid(data=X, sensor_ids=sensor_ids, grid_ctx=grid_ctx)
+    X_grid = to_grid(data=X, sensor_ids=sensor_ids, grid_ctx=grid_ctx, aq_backend=aq_backend)
 
     return X_grid, time_index, meteo_mags
 
 
-def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
+def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict, aq_backend: AQBackend):
     """
     Receives data in shape (channels, timestamps, sensors) and returns the same data in
     shape (channels, timestamps, rows, cols) where rows, cols are the coordinates of the sensor in the grid.
@@ -282,11 +252,10 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     h, w = grid.shape
     m, t, s = data.shape
 
-    df_sensors = pd.read_sql_query(text("SELECT id, utm_x, utm_y FROM merged_sensors"), con=metraq_db.connection)
-
     sensor_ids = np.asarray(sensor_ids)
     if sensor_ids.shape[0] != s:
         raise ValueError(f"sensor_ids length ({sensor_ids.shape[0]}) does not match data sensors dimension ({s})")
+    df_sensors = aq_backend.get_sensors(sensors=sensor_ids.tolist())
 
     rows, cols, mapped = map_sensor_ids_to_grid(
         grid_ctx,
@@ -377,14 +346,19 @@ def _concatenate_parts(parts: list[np.ndarray]) -> np.ndarray | None:
     return np.concatenate(parts, axis=0)
 
 
-def _build_sensor_mask(*, grid_ctx: dict, sensors: list[int] | np.ndarray) -> np.ndarray:
+def _build_sensor_mask(*, grid_ctx: dict, sensors: list[int] | np.ndarray, aq_backend: AQBackend) -> np.ndarray:
     sensors = np.asarray(sensors, dtype=int)
     rows, cols = grid_ctx.get("grid").shape
 
     if sensors.size == 0:
         return np.zeros((1, 1, rows, cols), dtype=np.int32)
 
-    return to_grid(data=sensors[None, None, :], sensor_ids=sensors.tolist(), grid_ctx=grid_ctx).astype(int)
+    return to_grid(
+        data=sensors[None, None, :],
+        sensor_ids=sensors.tolist(),
+        grid_ctx=grid_ctx,
+        aq_backend=aq_backend,
+    ).astype(int)
 
 
 def _compute_pollutant_normalization_stats(*,
@@ -455,7 +429,8 @@ def collect_ensemble_data(*,
                           number_of_noise_channels: int,
                           number_of_val_sensors: int,
                           add_distance_to_sensors: bool,
-                          normalize: bool = False) -> dict:
+                          normalize: bool = False,
+                          aq_backend: AQBackend) -> dict:
     """
     Build the split-dependent data for a single ensemble member from the static data collected by `collect_data`.
     """
@@ -471,14 +446,15 @@ def collect_ensemble_data(*,
         test_number=0,
         pollutants=data['pollutants'],
         sensors=available_sensors,
+        aq_backend=aq_backend,
     )
 
     assert np.intersect1d(test_sensors, train_sensors).size == 0, "Sensors in test_sensors have leaked to train_sensors"
     assert np.intersect1d(val_sensors, train_sensors).size == 0, "Sensors in val_sensors have leaked to train_sensors"
     assert np.intersect1d(test_sensors, val_sensors).size == 0, "sensors in test_sensors have leaked to val_sensors"
 
-    train_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=train_sensors)
-    val_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=val_sensors)
+    train_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=train_sensors, aq_backend=aq_backend)
+    val_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=val_sensors, aq_backend=aq_backend)
     test_mask = np.array(data['test_mask'], copy=True).astype(int)
 
     parts = []
@@ -541,6 +517,7 @@ def collect_data(*, start_date: datetime,
                  pollutants: list[int],
                  test_sensors: list[int] = None,
                  normalize: bool = False,
+                 aq_backend: AQBackend,
                  ) -> dict:
     """
     Collect the static data for a whole training run.
@@ -549,10 +526,10 @@ def collect_data(*, start_date: datetime,
     train/validation split. Use `collect_ensemble_data` to materialize the per-ensemble tensors.
     """
     test_sensors = [] if test_sensors is None else list(test_sensors)
-    grid_ctx, sensor_ids = get_grid()
+    grid_ctx, sensor_ids = get_grid(pollutants=pollutants, aq_backend=aq_backend)
     rows, cols = grid_ctx.get("grid").shape
     hours = (end_date - start_date) // timedelta(hours=1) + 1
-    test_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=test_sensors)
+    test_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=test_sensors, aq_backend=aq_backend)
 
     # Get pollutants data
     pd_data, time_index, _, _ = generate_pollutant_magnitudes(start_date=start_date,
@@ -560,7 +537,8 @@ def collect_data(*, start_date: datetime,
                                                               pollutants=pollutants,
                                                               grid_ctx=grid_ctx,
                                                               sensor_ids=sensor_ids,
-                                                              normalize=False)
+                                                              normalize=False,
+                                                              aq_backend=aq_backend)
     pollutant_norm_stats = None
     pollutant_norm_channels = None
     if normalize:
@@ -612,7 +590,13 @@ def collect_data(*, start_date: datetime,
 
     # Generate meteo channels
     if add_meteo:
-        meteo, _, meteo_mags = generate_meteo_magnitudes(start_date=start_date, end_date=end_date, grid_ctx=grid_ctx, sensor_ids=sensor_ids)
+        meteo, _, meteo_mags = generate_meteo_magnitudes(
+            start_date=start_date,
+            end_date=end_date,
+            grid_ctx=grid_ctx,
+            sensor_ids=sensor_ids,
+            aq_backend=aq_backend,
+        )
         static_input_suffix.append(meteo)
 
     test_data = pollutant_value_data * test_mask.astype(bool)
@@ -638,6 +622,9 @@ def collect_data(*, start_date: datetime,
 
 
 if __name__ == "__main__":
+    from metraq_dip.data.aq_backends import get_aq_backend
+
+    aq_backend = get_aq_backend(dataset="metraq", backend="files")
     static_data = collect_data(start_date=datetime.strptime('2024-03-12 09:00:00', '%Y-%m-%d %H:%M:%S'),
                                end_date=datetime.strptime('2024-03-13 08:00:00', '%Y-%m-%d %H:%M:%S'),
                                add_meteo=False,
@@ -646,12 +633,14 @@ if __name__ == "__main__":
                                add_traffic_data=True,
                                pollutants=[7],     # TODO: Add support for multiple pollutants
                                test_sensors=[28079024, 28079027, 28079054, 28079058],
-                               normalize=True)
+                               normalize=True,
+                               aq_backend=aq_backend)
 
     d = collect_ensemble_data(data=static_data,
                               number_of_noise_channels=8,
                               number_of_val_sensors=4,
                               add_distance_to_sensors=True,
-                              normalize=True)
+                              normalize=True,
+                              aq_backend=aq_backend)
 
     pass

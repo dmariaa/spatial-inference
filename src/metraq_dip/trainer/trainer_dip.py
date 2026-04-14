@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from dateutil.parser import parse
 from tqdm import tqdm
 
+from metraq_dip.data.aq_backends import get_aq_backend_for_config
 from metraq_dip.data.data import collect_data, collect_ensemble_data
 from metraq_dip.model.base_model_v2 import Autoencoder3D
 from metraq_dip.model.unet_model import UNet3D
@@ -39,6 +40,7 @@ def get_model_output(*, k_output: torch.Tensor,
 class DipTrainer:
     def __init__(self, configuration: dict):
         self.config = configuration
+        self.aq_backend = get_aq_backend_for_config(configuration)
         self.end_date = parse(configuration.get('date'))
         self.date_window = pd.to_timedelta(configuration.get('hours') - 1, unit='h')
         self.start_date = self.end_date - self.date_window
@@ -73,7 +75,8 @@ class DipTrainer:
             add_traffic_data=self.config.get('add_traffic_data'),
             test_sensors=self.test_sensors,
             pollutants=self.pollutants,
-            normalize=self.config.get('normalize')
+            normalize=self.config.get('normalize'),
+            aq_backend=self.aq_backend,
         )
 
     def _get_ensemble_data(self):
@@ -82,7 +85,8 @@ class DipTrainer:
             number_of_noise_channels=8,
             number_of_val_sensors=self.config.get('validation_sensors'),
             add_distance_to_sensors=self.config.get('add_distance_to_sensors'),
-            normalize=self.config.get('normalize')
+            normalize=self.config.get('normalize'),
+            aq_backend=self.aq_backend,
         )
 
         self.x_data = torch.Tensor(data['input_data'])[None, ...].to(self.device)
@@ -277,13 +281,23 @@ class DipTrainer:
 
 
 if __name__ == "__main__":
+    from metraq_dip.data.aq_backends import get_aq_backend
     from metraq_dip.tools.random_tools import set_seed, get_spread_test_groups
 
     output_folder = R"output"
+    aq_backend = get_aq_backend(dataset="metraq", backend="files")
 
-    test_sensors, _ = get_spread_test_groups(n_groups=1, group_size=4, max_uses_per_sensor=1, magnitudes=[7])
+    test_sensors, _ = get_spread_test_groups(
+        n_groups=1,
+        group_size=4,
+        max_uses_per_sensor=1,
+        magnitudes=[7],
+        aq_backend=aq_backend,
+    )
 
     base_config = {
+        'aq_dataset': 'metraq',
+        'aq_backend': 'files',
         'normalize': False,
         'pollutants': [7],
         'add_meteo': False,

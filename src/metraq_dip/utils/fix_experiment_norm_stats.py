@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from metraq_dip.data.aq_backends import AQBackend, get_aq_backend_for_config
 from metraq_dip.data import data as data_module
 from metraq_dip.tools.config_tools import load_session_config
 from metraq_dip.tools.random_tools import sensor_group_hash
@@ -98,10 +99,11 @@ def recover_experiment_minmax_map(
     hours: int,
     time_window: pd.Timestamp,
     test_sensors: tuple[int, ...],
+    aq_backend: AQBackend,
 ) -> dict[int, tuple[float, float]]:
     end_date = pd.Timestamp(time_window)
     start_date = end_date - pd.Timedelta(hours=hours - 1)
-    grid_ctx, sensor_ids = data_module.get_grid()
+    grid_ctx, sensor_ids = data_module.get_grid(pollutants=pollutants, aq_backend=aq_backend)
     pollutant_data, _, _, _ = data_module.generate_pollutant_magnitudes(
         start_date=start_date.to_pydatetime(),
         end_date=end_date.to_pydatetime(),
@@ -109,8 +111,9 @@ def recover_experiment_minmax_map(
         grid_ctx=grid_ctx,
         sensor_ids=sensor_ids,
         normalize=False,
+        aq_backend=aq_backend,
     )
-    test_mask = data_module._build_sensor_mask(grid_ctx=grid_ctx, sensors=list(test_sensors))
+    test_mask = data_module._build_sensor_mask(grid_ctx=grid_ctx, sensors=list(test_sensors), aq_backend=aq_backend)
     return data_module._compute_pollutant_normalization_stats(
         pollutant_data=pollutant_data,
         pollutants=pollutants,
@@ -172,6 +175,7 @@ def repair_experiment_folder(
 
     valid_sensor_groups, valid_time_windows = load_session_inventory(session_folder)
     cached_stats: dict[tuple[str, str], dict[int, tuple[float, float]]] = {}
+    aq_backend = get_aq_backend_for_config(config)
     progress_bar = tqdm(
         experiment_files,
         desc="Repairing experiments",
@@ -201,6 +205,7 @@ def repair_experiment_folder(
                         hours=int(config.hours),
                         time_window=artifact.time_window,
                         test_sensors=artifact.test_sensors,
+                        aq_backend=aq_backend,
                     )
 
                 write_experiment_minmax_map(

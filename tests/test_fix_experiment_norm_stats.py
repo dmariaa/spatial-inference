@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,11 +46,12 @@ def test_repair_experiment_folder_backfills_missing_minmax_map(monkeypatch, tmp_
 
     calls: list[tuple[list[int], int, tuple[int, ...], str]] = []
 
-    def fake_recover_experiment_minmax_map(*, pollutants, hours, time_window, test_sensors):
+    def fake_recover_experiment_minmax_map(*, pollutants, hours, time_window, test_sensors, aq_backend):
         calls.append((pollutants, hours, test_sensors, time_window.isoformat()))
         return {7: (12.5, 3.5)}
 
     monkeypatch.setattr(fixer, "recover_experiment_minmax_map", fake_recover_experiment_minmax_map)
+    monkeypatch.setattr(fixer, "get_aq_backend_for_config", lambda config: object())
 
     summary = fixer.repair_experiment_folder(session_folder)
 
@@ -93,3 +93,46 @@ def test_repair_experiment_folder_skips_unnormalized_sessions(monkeypatch, tmp_p
 
     with np.load(experiment_file, allow_pickle=True) as archive:
         assert "minmax_map" not in archive.files
+
+
+def test_repair_experiment_folder_uses_backend_from_config(monkeypatch, tmp_path):
+    session_folder = tmp_path
+    np.savez(
+        session_folder / "data.npz",
+        test_sensors=np.array([[10, 20, 30, 40]], dtype=np.int32),
+        time_windows=np.array(["2024-01-01T00:00:00"], dtype="datetime64[s]"),
+    )
+    experiment_file = session_folder / "exp_10-20-30-40_20240101T000000.npz"
+    _write_experiment_file(experiment_file)
+
+    monkeypatch.setattr(
+        fixer,
+        "load_session_config",
+        lambda path: SimpleNamespace(
+            normalize=True,
+            pollutants=[7],
+            hours=24,
+            aq_dataset="metraq",
+            aq_backend="db",
+        ),
+    )
+
+    captured_backend: dict[str, str | None] = {}
+    monkeypatch.setattr(
+        fixer,
+        "get_aq_backend_for_config",
+        lambda config: {"dataset": config.aq_dataset, "backend": config.aq_backend},
+    )
+
+    def fake_recover_experiment_minmax_map(*, pollutants, hours, time_window, test_sensors, aq_backend):
+        captured_backend["dataset"] = aq_backend["dataset"]
+        captured_backend["backend"] = aq_backend["backend"]
+        return {7: (1.0, 2.0)}
+
+    monkeypatch.setattr(fixer, "recover_experiment_minmax_map", fake_recover_experiment_minmax_map)
+
+    summary = fixer.repair_experiment_folder(session_folder)
+
+    assert summary.updated == 1
+    assert summary.failed == []
+    assert captured_backend == {"dataset": "metraq", "backend": "db"}

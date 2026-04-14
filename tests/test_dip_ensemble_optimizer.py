@@ -31,6 +31,8 @@ def test_optimizers_follow_surface_optimizer_protocol():
         "val_mask": np.ones((1, 2, 4, 4), dtype=bool),
     }
     configuration = {
+        "aq_dataset": "metraq",
+        "aq_backend": "files",
         "epochs": 1,
         "lr": 1e-3,
         "validation_sensors": 1,
@@ -87,6 +89,8 @@ def test_dip_ensemble_optimizer_returns_reduced_surface_and_artifacts(monkeypatc
 
     optimizer = DipEnsembleOptimizer(
         configuration={
+            "aq_dataset": "metraq",
+            "aq_backend": "files",
             "ensemble_size": 3,
             "validation_sensors": 1,
             "add_distance_to_sensors": False,
@@ -112,7 +116,12 @@ def test_dip_ensemble_optimizer_returns_reduced_surface_and_artifacts(monkeypatc
 
 def test_dip_ensemble_optimizer_requires_optimization_before_artifacts():
     optimizer = DipEnsembleOptimizer(
-        configuration={"ensemble_size": 1, "validation_sensors": 1},
+        configuration={
+            "aq_dataset": "metraq",
+            "aq_backend": "files",
+            "ensemble_size": 1,
+            "validation_sensors": 1,
+        },
         static_data={"unused": True},
         disable_tqdm=True,
         optimizer_factory=lambda **kwargs: None,

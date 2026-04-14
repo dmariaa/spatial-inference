@@ -51,6 +51,7 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
 
     monkeypatch.setattr(experiments, "collect_data", lambda **kwargs: static_data)
     monkeypatch.setattr(experiments, "DipEnsembleOptimizer", DummyEnsembleOptimizer)
+    monkeypatch.setattr(experiments, "get_aq_backend_for_config", lambda config: object())
     def fake_get_interpolation_loss(x_data, x_mask, y_data, y_mask, pollutants):
         assert isinstance(x_data, np.ndarray)
         assert isinstance(x_mask, np.ndarray)
@@ -65,6 +66,8 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
 
     row_result = experiments._run_single_experiment(
         config_base={
+            "aq_dataset": "metraq",
+            "aq_backend": "files",
             "pollutants": [7],
             "hours": 1,
             "normalize": True,
@@ -126,3 +129,72 @@ def test_run_experiments_writes_failure_log(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "Full tracebacks written to" in captured.out
     assert "FAILED group-a" not in captured.out
+
+
+def test_ensure_base_files_uses_backend_from_config(monkeypatch, tmp_path):
+    class DummyTimeWindowsConfig:
+        def model_dump(self) -> dict[str, object]:
+            return {"year": 2024, "windows_per_month": 1, "start_hours": [8], "weekend_fraction": 0.4}
+
+    class DummySessionConfig:
+        aq_dataset = "metraq"
+        aq_backend = "db"
+        pollutants = [7]
+        spread_test_groups = type("Spread", (), {"n_groups": 1, "group_size": 4, "max_uses_per_sensor": 2})()
+        random_time_windows = DummyTimeWindowsConfig()
+        all_time_windows = None
+
+        def model_dump(self, *, exclude=None):
+            return {
+                "aq_dataset": "metraq",
+                "aq_backend": "db",
+                "pollutants": [7],
+                "hours": 24,
+                "epochs": 2,
+                "ensemble_size": 1,
+                "lr": 0.01,
+                "normalize": False,
+                "add_meteo": False,
+                "add_time_channels": False,
+                "add_coordinates": False,
+                "add_distance_to_sensors": False,
+                "add_traffic_data": False,
+                "model": {
+                    "base_channels": 16,
+                    "levels": 3,
+                    "preserve_time": False,
+                    "learned_upsampling": False,
+                    "skip_connections": True,
+                },
+            }
+
+    captured_backend: dict[str, str | None] = {}
+    monkeypatch.setattr(experiments, "load_session_config", lambda path: DummySessionConfig())
+    monkeypatch.setattr(
+        experiments,
+        "get_random_time_windows",
+        lambda **kwargs: [pd.Timestamp("2024-01-01T08:00:00")],
+    )
+    monkeypatch.setattr(
+        experiments,
+        "get_aq_backend_for_config",
+        lambda config: {"dataset": config.aq_dataset, "backend": config.aq_backend},
+    )
+
+    def fake_get_spread_test_groups(**kwargs):
+        captured_backend["dataset"] = kwargs["aq_backend"]["dataset"]
+        captured_backend["backend"] = kwargs["aq_backend"]["backend"]
+        return np.array([[10, 20, 30, 40]], dtype=np.int32), {}
+
+    monkeypatch.setattr(experiments, "get_spread_test_groups", fake_get_spread_test_groups)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("session: test\n", encoding="utf-8")
+
+    config_base, _, test_sensors, time_windows, _ = experiments._ensure_base_files(config_file=config_file)
+
+    assert captured_backend == {"dataset": "metraq", "backend": "db"}
+    assert config_base["aq_dataset"] == "metraq"
+    assert config_base["aq_backend"] == "db"
+    np.testing.assert_array_equal(test_sensors, np.array([[10, 20, 30, 40]], dtype=np.int32))
+    assert list(pd.to_datetime(time_windows)) == [pd.Timestamp("2024-01-01T08:00:00")]

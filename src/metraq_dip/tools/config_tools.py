@@ -83,6 +83,8 @@ class AllTimeWindowsConfig(BaseModel):
 class TrainerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    aq_dataset: str
+    aq_backend: str
     pollutants: list[int] = Field(min_length=1)
     hours: int = Field(gt=0)
     epochs: int = Field(gt=0)
@@ -113,6 +115,22 @@ class TrainerConfig(BaseModel):
             raise ValueError("pollutants must contain positive sensor magnitude ids.")
         return value
 
+    @field_validator("aq_dataset")
+    @classmethod
+    def validate_aq_dataset(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("aq_dataset must be a non-empty string.")
+        return normalized
+
+    @field_validator("aq_backend")
+    @classmethod
+    def validate_aq_backend(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("aq_backend must be a non-empty string.")
+        return normalized
+
     @field_validator("test_sensors")
     @classmethod
     def validate_test_sensors(cls, value: list[int] | None) -> list[int] | None:
@@ -135,6 +153,13 @@ class TrainerConfig(BaseModel):
         if abs(total - 1.0) > 1e-6:
             raise ValueError("data_split entries must sum to 1.0.")
         return value
+
+    @model_validator(mode="after")
+    def validate_aq_selection(self) -> "TrainerConfig":
+        from metraq_dip.data.aq_backends import get_aq_backend
+
+        get_aq_backend(dataset=self.aq_dataset, backend=self.aq_backend)
+        return self
 
 
 class SessionConfig(TrainerConfig):

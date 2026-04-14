@@ -11,7 +11,6 @@ warnings.filterwarnings(
 import os
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,6 +19,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from metraq_dip.data.aq_backends import get_aq_backend_for_config
 from metraq_dip.data.data import collect_data
 from metraq_dip.tools.config_tools import SessionConfig, load_session_config
 from metraq_dip.tools.random_tools import (
@@ -28,12 +28,15 @@ from metraq_dip.tools.random_tools import (
     get_spread_test_groups,
     sensor_group_hash,
 )
-from metraq_dip.tools.tools import get_interpolation_loss
+from metraq_dip.tools.results_stats import (
+    RESULTS_DATA_STAT_COLUMNS,
+    backfill_results_stat_columns,
+    compute_results_data_stats,
+    ensure_results_stat_columns,
+    get_experiment_name,
+)
+from metraq_dip.tools.tools import get_interpolation_loss, is_truthy
 from metraq_dip.trainer.dip_ensemble_optimizer import DipEnsembleOptimizer, reduce_surface_ensemble
-
-
-def get_experiment_name(sensor_group_key: str, time_window: datetime) -> str:
-    return f"exp_{sensor_group_key}_{time_window.strftime('%Y%m%dT%H%M%S')}"
 
 
 def _get_time_windows(session_config: SessionConfig) -> list[pd.Timestamp]:
@@ -55,6 +58,7 @@ def _ensure_base_files(
 ) -> tuple[dict[str, Any], str, np.ndarray, np.ndarray, pd.DataFrame]:
     experiment_output_folder = str(config_file.parent)
     session_config = load_session_config(config_file)
+    aq_backend = get_aq_backend_for_config(session_config)
     config_base = session_config.model_dump(
         exclude={"spread_test_groups", "random_time_windows", "all_time_windows"},
     )
@@ -73,6 +77,7 @@ def _ensure_base_files(
             group_size=spread_test_groups_params.group_size,
             max_uses_per_sensor=spread_test_groups_params.max_uses_per_sensor,
             magnitudes=session_config.pollutants,
+            aq_backend=aq_backend,
         )
         time_windows = _get_time_windows(session_config)
         np.savez(data_file, test_sensors=test_sensors, time_windows=time_windows)
@@ -93,6 +98,18 @@ def _ensure_base_files(
         df["KRG_MSELoss"] = 0.0
         df["IDW_L1Loss"] = 0.0
         df["IDW_MSELoss"] = 0.0
+
+    schema_updated = ensure_results_stat_columns(df)
+    backfilled = backfill_results_stat_columns(
+        df=df,
+        experiment_folder=experiment_output_folder,
+        row_selector=(
+            df["processed"].map(is_truthy)
+            if "processed" in df.columns
+            else pd.Series(False, index=df.index)
+        ),
+    )
+    if schema_updated or backfilled or not os.path.exists(results_file):
         df.to_csv(results_file, index=False)
 
     return config_base, experiment_output_folder, test_sensors, time_windows, df
@@ -305,7 +322,7 @@ def _run_single_experiment(
     config["date"] = time_window_dt.isoformat()
     config["validation_sensors"] = 4
     config["test_sensors"] = test_sensor_group
-
+    aq_backend = get_aq_backend_for_config(config)
     date_window = pd.to_timedelta(config["hours"] - 1, unit="h")
     static_data = collect_data(
         start_date=time_window_dt - date_window,
@@ -317,6 +334,7 @@ def _run_single_experiment(
         pollutants=list(config["pollutants"]),
         test_sensors=list(test_sensor_group),
         normalize=bool(config.get("normalize")),
+        aq_backend=aq_backend,
     )
 
     optimizer = DipEnsembleOptimizer(
@@ -329,6 +347,11 @@ def _run_single_experiment(
     experiment_data = _build_experiment_artifacts(
         static_data=static_data,
         optimizer_artifacts=optimizer_artifacts,
+    )
+    data_stats = compute_results_data_stats(
+        train_data=experiment_data["train_data"],
+        train_mask=experiment_data["train_mask"],
+        val_mask=experiment_data["val_mask"],
     )
 
     pollutants = list(config["pollutants"])
@@ -384,6 +407,7 @@ def _run_single_experiment(
         "IDW_L1Loss": interpolation_results[2]["loss"],
         "IDW_MSELoss": interpolation_results[3]["loss"],
         "processed": True,
+        **data_stats,
     }
 
 
@@ -400,6 +424,7 @@ def _apply_row_result(df: pd.DataFrame, row_result: dict[str, Any]) -> None:
             "KRG_MSELoss",
             "IDW_L1Loss",
             "IDW_MSELoss",
+            *RESULTS_DATA_STAT_COLUMNS,
         ],
     ] = [
         row_result["sensor_group"],
@@ -410,6 +435,11 @@ def _apply_row_result(df: pd.DataFrame, row_result: dict[str, Any]) -> None:
         row_result["KRG_MSELoss"],
         row_result["IDW_L1Loss"],
         row_result["IDW_MSELoss"],
+        row_result["data_mean"],
+        row_result["data_median"],
+        row_result["data_max"],
+        row_result["data_std"],
+        row_result["data_p90_p10"],
     ]
 
 
@@ -462,7 +492,13 @@ def run_experiments(
         for time_window in time_windows:
             time_window_ts = pd.to_datetime(time_window)
             row_mask = (df["time_window"] == time_window_ts) & (df["sensor_group"] == sensor_group_key)
-            if not df.loc[row_mask].empty and df.loc[row_mask, "processed"].any():
+            row = df.loc[row_mask]
+            if not row.empty and row["processed"].map(is_truthy).any():
+                row_has_all_stats = not row.loc[:, RESULTS_DATA_STAT_COLUMNS].isna().any(axis=1).any()
+                if row_has_all_stats:
+                    continue
+
+            if row.empty:
                 continue
 
             jobs.append(

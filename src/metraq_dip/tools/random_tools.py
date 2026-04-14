@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from metraq_dip.data.metraq_db import metraq_db
+from metraq_dip.data.aq_backends import AQBackend
 
 def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
@@ -31,11 +31,18 @@ def sensor_group_hash(ids):
     return payload
 
 
-def get_random_sensors(*, val_number: int, test_number: int, pollutants: List[int], sensors: List[int] = None):
-    sensors: pd.DataFrame = metraq_db.get_sensors(magnitudes=pollutants, sensors=sensors)
-    random_sensors = sensors.sample(frac=1)["id"].to_numpy()
+def get_random_sensors(
+    *,
+    val_number: int,
+    test_number: int,
+    pollutants: List[int],
+    aq_backend: AQBackend,
+    sensors: List[int] = None,
+):
+    sensors_df: pd.DataFrame = aq_backend.get_sensors(magnitudes=pollutants, sensors=sensors)
+    random_sensors = sensors_df.sample(frac=1)["id"].to_numpy()
 
-    train_number = len(sensors) - val_number - test_number
+    train_number = len(sensors_df) - val_number - test_number
     train_sensors = random_sensors[:train_number]
     val_sensors = random_sensors[train_number:train_number + val_number]
     test_sensors = random_sensors[train_number + val_number:]
@@ -50,8 +57,15 @@ def _score_group_min_pairwise_dist(xy: np.ndarray) -> float:
     return float(np.sqrt(d2[d2 > 0].min()))
 
 
-def get_spread_test_groups(*, n_groups: int, group_size: int, max_uses_per_sensor: int, magnitudes: list[int]):
-    df = metraq_db.get_sensors(magnitudes=magnitudes)
+def get_spread_test_groups(
+    *,
+    n_groups: int,
+    group_size: int,
+    max_uses_per_sensor: int,
+    magnitudes: list[int],
+    aq_backend: AQBackend,
+):
+    df = aq_backend.get_sensors(magnitudes=magnitudes)
     ids = df["id"].to_numpy()
     xy = df[["utm_x", "utm_y"]].to_numpy().astype(np.float64)
 

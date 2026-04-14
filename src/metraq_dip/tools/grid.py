@@ -1,4 +1,5 @@
 import warnings
+from functools import lru_cache
 from typing import Optional, Tuple, Union
 
 import numpy as np
@@ -8,24 +9,73 @@ from pyproj import Transformer
 from sqlalchemy import text
 from shapely.geometry import Polygon, box, Point
 
-# --- CRS transformers (same as your Voronoi script) ---
-TO_M   = Transformer.from_crs("epsg:4326", "epsg:25830", always_xy=True)  # lon,lat -> x,y (meters)
-TO_DEG = Transformer.from_crs("epsg:25830", "epsg:4326", always_xy=True)  # x,y -> lon,lat (degrees)
+DEFAULT_METRIC_CRS = "EPSG:25830"
 
 
-def _project_ll_to_m(df: pd.DataFrame):
-    """Project lon/lat columns to meters arrays (x, y)."""
-    xs, ys = TO_M.transform(
-        df["longitude"].to_numpy(dtype=float),
-        df["latitude"].to_numpy(dtype=float)
+@lru_cache(maxsize=None)
+def _get_transformers(metric_crs: str) -> tuple[Transformer, Transformer]:
+    normalized = str(metric_crs).strip() or DEFAULT_METRIC_CRS
+    return (
+        Transformer.from_crs("epsg:4326", normalized, always_xy=True),
+        Transformer.from_crs(normalized, "epsg:4326", always_xy=True),
     )
-    return np.asarray(xs), np.asarray(ys)
+
+
+def _resolve_metric_crs(df: pd.DataFrame, metric_crs: str | None = None) -> str:
+    if metric_crs is not None:
+        normalized = str(metric_crs).strip()
+        if not normalized:
+            raise ValueError("metric_crs must be a non-empty string when provided.")
+        return normalized
+
+    if "metric_crs" in df.columns:
+        values = df["metric_crs"].dropna().astype(str).str.strip()
+        values = values[values != ""].unique().tolist()
+        if len(values) > 1:
+            raise ValueError(f"Sensor dataframe contains multiple metric CRS values: {values}")
+        if values:
+            return str(values[0])
+
+    return DEFAULT_METRIC_CRS
+
+
+def _project_ll_to_m(df: pd.DataFrame, *, metric_crs: str) -> tuple[np.ndarray, np.ndarray]:
+    """Return metric coordinates, reusing utm_x/utm_y when present."""
+    xs = np.full(len(df), np.nan, dtype=np.float64)
+    ys = np.full(len(df), np.nan, dtype=np.float64)
+
+    if {"utm_x", "utm_y"}.issubset(df.columns):
+        xs = pd.to_numeric(df["utm_x"], errors="coerce").to_numpy(dtype=np.float64)
+        ys = pd.to_numeric(df["utm_y"], errors="coerce").to_numpy(dtype=np.float64)
+
+    missing = ~np.isfinite(xs) | ~np.isfinite(ys)
+    if missing.any():
+        if not {"longitude", "latitude"}.issubset(df.columns):
+            missing_count = int(missing.sum())
+            raise ValueError(
+                f"Cannot project {missing_count} sensor(s) without coordinates. "
+                "Expected utm_x/utm_y or latitude/longitude columns."
+            )
+
+        to_m, _ = _get_transformers(metric_crs)
+        projected_xs, projected_ys = to_m.transform(
+            df.loc[missing, "longitude"].to_numpy(dtype=float),
+            df.loc[missing, "latitude"].to_numpy(dtype=float),
+        )
+        xs[missing] = np.asarray(projected_xs, dtype=np.float64)
+        ys[missing] = np.asarray(projected_ys, dtype=np.float64)
+
+    if (~np.isfinite(xs) | ~np.isfinite(ys)).any():
+        raise ValueError("Some sensors are still missing metric coordinates after projection.")
+
+    return xs, ys
 
 def _cells_with_points_ll(ctx: dict):
     """Return list of lat/lon rings for all grid cells that contain >=1 sensor."""
     xs, ys = ctx["xs"], ctx["ys"]
     bbox   = ctx["bbox"]
     cell   = ctx["cell_size_m"]
+    _, to_deg = _get_transformers(ctx.get("metric_crs", DEFAULT_METRIC_CRS))
 
     minx, miny, maxx, maxy = bbox.bounds
     start_x = np.floor((minx) / cell) * cell
@@ -46,14 +96,21 @@ def _cells_with_points_ll(ctx: dict):
         # Build square ring in meters (counter-clockwise)
         ring_x = [x0, x1, x1, x0, x0]
         ring_y = [y0, y0, y1, y1, y0]
-        lons, lats = TO_DEG.transform(np.array(ring_x), np.array(ring_y))
+        lons, lats = to_deg.transform(np.array(ring_x), np.array(ring_y))
         rings.append(list(zip(lats.tolist(), lons.tolist())))
     return rings
 
-def prepare_grid_context(df: pd.DataFrame, cell_size_m: int = 500, margin_m_x: int = 1000, margin_m_y: int = 1000):
+
+def prepare_grid_context(
+    df: pd.DataFrame,
+    cell_size_m: int = 500,
+    margin_m_x: int = 1000,
+    margin_m_y: int = 1000,
+    metric_crs: str | None = None,
+):
     """
     Build grid context once from sensor points.
-    - Projects points to meters (ETRS89 / UTM 30N)
+    - Projects points to a metric CRS
     - Computes a padded bbox
     - Generates a square grid of cell_size_m covering the bbox
 
@@ -69,7 +126,9 @@ def prepare_grid_context(df: pd.DataFrame, cell_size_m: int = 500, margin_m_x: i
       - grid_cells_m: list[Polygon] of grid cells in meters
       - grid_cells_ll: list[list[(lat, lon)]] same cells in lat/lon rings
     """
-    xs, ys = _project_ll_to_m(df)
+    resolved_metric_crs = _resolve_metric_crs(df, metric_crs)
+    xs, ys = _project_ll_to_m(df, metric_crs=resolved_metric_crs)
+    _, to_deg = _get_transformers(resolved_metric_crs)
 
     # bbox in meters (with margin)
     minx, miny = xs.min(), ys.min()
@@ -111,13 +170,14 @@ def prepare_grid_context(df: pd.DataFrame, cell_size_m: int = 500, margin_m_x: i
     grid_cells_ll = []
     for poly in grid_cells_m:
         x_coords, y_coords = poly.exterior.coords.xy
-        lons_out, lats_out = TO_DEG.transform(np.array(x_coords), np.array(y_coords))
+        lons_out, lats_out = to_deg.transform(np.array(x_coords), np.array(y_coords))
         grid_cells_ll.append(list(zip(lats_out.tolist(), lons_out.tolist())))
 
     return {
         "df": df,
         "xs": xs,
         "ys": ys,
+        "metric_crs": resolved_metric_crs,
         "bbox": bbox,
         "grid": grid,
         "grid_cells_m": grid_cells_m,
@@ -181,18 +241,19 @@ def _add_highlight_cells(
         return
 
     df = ctx['df']
+    to_m, _ = _get_transformers(ctx.get("metric_crs", DEFAULT_METRIC_CRS))
     lats, lons = [], []
     lats_h, lons_h = [], []
 
     for ring in rings:
         is_highlight = False
-        utm_ring = [TO_M.transform(*b) for b in ring]
+        utm_ring = [to_m.transform(lon, lat) for lat, lon in ring]
         quad = Polygon(utm_ring)
 
         for sensor_id in val_sensors:
             latitude, longitude = df[df['id']==sensor_id][['latitude', 'longitude']].values[0]
-            utm_lat, utm_lon = TO_M.transform(latitude, longitude)
-            point = Point(utm_lat, utm_lon)
+            utm_x, utm_y = to_m.transform(longitude, latitude)
+            point = Point(utm_x, utm_y)
             is_highlight = quad.contains(point)
 
             if is_highlight:
@@ -275,6 +336,7 @@ def plot_grid_map(
 ):
     """Render the grid as ONE Scattermap trace (fast), plus points."""
     df = ctx["df"]
+    _, to_deg = _get_transformers(ctx.get("metric_crs", DEFAULT_METRIC_CRS))
     fig = go.Figure()
 
     _add_grid_to_figure(
@@ -295,10 +357,14 @@ def plot_grid_map(
             zoom=zoom,
             # center on the grid bbox centroid (not data mean)
             center=dict(
-                lat=TO_DEG.transform((ctx["bbox"].bounds[0] + ctx["bbox"].bounds[2]) / 2,
-                                      (ctx["bbox"].bounds[1] + ctx["bbox"].bounds[3]) / 2)[1],
-                lon=TO_DEG.transform((ctx["bbox"].bounds[0] + ctx["bbox"].bounds[2]) / 2,
-                                      (ctx["bbox"].bounds[1] + ctx["bbox"].bounds[3]) / 2)[0]
+                lat=to_deg.transform(
+                    (ctx["bbox"].bounds[0] + ctx["bbox"].bounds[2]) / 2,
+                    (ctx["bbox"].bounds[1] + ctx["bbox"].bounds[3]) / 2,
+                )[1],
+                lon=to_deg.transform(
+                    (ctx["bbox"].bounds[0] + ctx["bbox"].bounds[2]) / 2,
+                    (ctx["bbox"].bounds[1] + ctx["bbox"].bounds[3]) / 2,
+                )[0]
             )
         ),
         margin=dict(l=0, r=0, t=40, b=0)

@@ -10,6 +10,13 @@ import pandas as pd
 from scipy.stats import friedmanchisquare, rankdata, wilcoxon
 from statsmodels.stats.multitest import multipletests
 
+from metraq_dip.tools.results_stats import (
+    backfill_results_stat_columns,
+    ensure_results_stat_columns,
+    validate_results_stat_columns,
+)
+from metraq_dip.tools.tools import is_truthy
+
 METHODS = ["DIP", "KRG", "IDW"]
 LOSS_METRICS = (
     ("MAE", "L1Loss"),
@@ -30,8 +37,43 @@ HISTOGRAM_VALUE_LABELS = {
 }
 
 
-def load_results(csv_path: str | Path) -> pd.DataFrame:
-    df = pd.read_csv(csv_path).copy()
+def resolve_results_csv(experiment_folder: str | Path) -> Path:
+    folder_path = Path(experiment_folder)
+    csv_path = folder_path / "results.csv"
+    if not csv_path.exists():
+        raise ValueError(
+            f"Experiment folder {folder_path} does not contain results.csv."
+        )
+    if not csv_path.is_file():
+        raise ValueError(f"Resolved results path is not a file: {csv_path}")
+    return csv_path
+
+def load_results(
+    csv_path: str | Path,
+    *,
+    experiment_folder: str | Path | None = None,
+) -> pd.DataFrame:
+    df = pd.read_csv(csv_path, dtype={"sensor_group": "string"}, parse_dates=["time_window"]).copy()
+    schema_updated = ensure_results_stat_columns(df)
+    backfilled = False
+    if experiment_folder is not None:
+        processed_selector = (
+            df["processed"].map(is_truthy)
+            if "processed" in df.columns
+            else pd.Series(True, index=df.index)
+        )
+        backfilled = backfill_results_stat_columns(
+            df=df,
+            experiment_folder=experiment_folder,
+            row_selector=processed_selector,
+        )
+        if schema_updated or backfilled:
+            df.to_csv(csv_path, index=False)
+        validate_results_stat_columns(
+            df=df,
+            row_selector=processed_selector,
+        )
+
     df["time_window_dt"] = pd.to_datetime(df["time_window"])
     df["date"] = df["time_window_dt"].dt.date.astype(str)
     df["hour"] = df["time_window_dt"].dt.strftime("%H:%M")
@@ -39,35 +81,11 @@ def load_results(csv_path: str | Path) -> pd.DataFrame:
     return df
 
 
-def resolve_results_csv(experiment_folder: str | Path) -> Path:
-    folder_path = Path(experiment_folder)
-    csv_path = folder_path / "results_with_stats.csv"
-    if not csv_path.exists():
-        raise ValueError(
-            f"Experiment folder {folder_path} does not contain results_with_stats.csv."
-        )
-    if not csv_path.is_file():
-        raise ValueError(f"Resolved results path is not a file: {csv_path}")
-    return csv_path
-
-
-def _is_truthy(value: Any) -> bool:
-    if pd.isna(value):
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
-    return bool(value)
-
-
 def filter_processed_rows(df: pd.DataFrame) -> pd.DataFrame:
     if "processed" not in df.columns:
         return df.copy()
 
-    processed_mask = df["processed"].map(_is_truthy)
+    processed_mask = df["processed"].map(is_truthy)
     filtered = df.loc[processed_mask].copy()
     if filtered.empty:
         raise ValueError("No processed rows found in the results file.")
@@ -393,7 +411,7 @@ def main(
     outdir.mkdir(parents=True, exist_ok=True)
 
     csv_path = resolve_results_csv(experiment_folder)
-    df = load_results(csv_path)
+    df = load_results(csv_path, experiment_folder=experiment_folder)
     group_map = get_group_map(df)
 
     pd.DataFrame(

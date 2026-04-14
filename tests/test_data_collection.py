@@ -6,7 +6,7 @@ import pandas as pd
 from metraq_dip.data import data as data_module
 
 
-def _fake_to_grid(*, data: np.ndarray, sensor_ids: list[int], grid_ctx: dict):
+def _fake_to_grid(*, data: np.ndarray, sensor_ids: list[int], grid_ctx: dict, aq_backend=None):
     mapping = {10: (0, 0), 20: (0, 1), 30: (1, 0), 40: (1, 1)}
     channels, timestamps, _ = data.shape
     rows, cols = grid_ctx["grid"].shape
@@ -31,11 +31,38 @@ def _build_fake_pollutant_data():
     return np.stack([pollutant, availability], axis=0)
 
 
+def test_get_grid_filters_sensor_catalog_by_pollutants(monkeypatch):
+    calls: list[tuple[list[int] | None, list[int] | None]] = []
+
+    class FakeBackend:
+        def get_sensors(self, *, magnitudes=None, sensors=None):
+            calls.append((magnitudes, sensors))
+            return pd.DataFrame(
+                {
+                    "id": [10, 20],
+                    "latitude": [40.4168, 40.4300],
+                    "longitude": [-3.7038, -3.7000],
+                }
+            )
+
+    grid_ctx, sensor_ids = data_module.get_grid(pollutants=[7, 8], aq_backend=FakeBackend())
+
+    assert sensor_ids == [10, 20]
+    assert calls == [([7, 8], None)]
+    assert grid_ctx["grid"].shape[0] > 0
+    assert grid_ctx["grid"].shape[1] > 0
+
+
 def test_collect_data_returns_only_static_components(monkeypatch):
     time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
     pollutant_data = _build_fake_pollutant_data()
+    fake_backend = object()
 
-    monkeypatch.setattr(data_module, "get_grid", lambda: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]))
+    monkeypatch.setattr(
+        data_module,
+        "get_grid",
+        lambda **kwargs: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]),
+    )
     monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
     monkeypatch.setattr(
         data_module,
@@ -83,6 +110,7 @@ def test_collect_data_returns_only_static_components(monkeypatch):
         add_traffic_data=True,
         pollutants=[7],
         test_sensors=[40],
+        aq_backend=fake_backend,
     )
 
     assert "input_data" not in result
@@ -98,8 +126,13 @@ def test_collect_data_returns_only_static_components(monkeypatch):
 def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypatch):
     time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
     pollutant_data = _build_fake_pollutant_data()
+    fake_backend = object()
 
-    monkeypatch.setattr(data_module, "get_grid", lambda: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]))
+    monkeypatch.setattr(
+        data_module,
+        "get_grid",
+        lambda **kwargs: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]),
+    )
     monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
     monkeypatch.setattr(
         data_module,
@@ -132,6 +165,7 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
         add_traffic_data=True,
         pollutants=[7],
         test_sensors=[40],
+        aq_backend=fake_backend,
     )
 
     monkeypatch.setattr(data_module, "get_random_sensors", lambda **kwargs: (np.array([10, 20]), np.array([30]), np.array([], dtype=int)))
@@ -152,6 +186,7 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
         number_of_val_sensors=1,
         add_distance_to_sensors=True,
         normalize=False,
+        aq_backend=fake_backend,
     )
 
     assert result["input_data"].shape == (13, 2, 2, 2)
@@ -189,6 +224,7 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
 def test_collect_data_normalizes_traffic_over_valid_24h_values(monkeypatch):
     time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
     pollutant_data = _build_fake_pollutant_data()
+    fake_backend = object()
     traffic_data = np.array(
         [
             [[10.0, 20.0], [0.0, 40.0]],
@@ -204,7 +240,11 @@ def test_collect_data_normalizes_traffic_over_valid_24h_values(monkeypatch):
         dtype=bool,
     )[None, ...]
 
-    monkeypatch.setattr(data_module, "get_grid", lambda: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]))
+    monkeypatch.setattr(
+        data_module,
+        "get_grid",
+        lambda **kwargs: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]),
+    )
     monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
     monkeypatch.setattr(
         data_module,
@@ -227,6 +267,7 @@ def test_collect_data_normalizes_traffic_over_valid_24h_values(monkeypatch):
         pollutants=[7],
         test_sensors=[],
         normalize=True,
+        aq_backend=fake_backend,
     )
 
     expected = traffic_data.copy()
@@ -241,8 +282,13 @@ def test_collect_data_normalizes_traffic_over_valid_24h_values(monkeypatch):
 def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monkeypatch):
     time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
     pollutant_data = _build_fake_pollutant_data()
+    fake_backend = object()
 
-    monkeypatch.setattr(data_module, "get_grid", lambda: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]))
+    monkeypatch.setattr(
+        data_module,
+        "get_grid",
+        lambda **kwargs: ({"grid": np.zeros((2, 2), dtype=int)}, [10, 20, 30, 40]),
+    )
     monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
     monkeypatch.setattr(
         data_module,
@@ -265,6 +311,7 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
         pollutants=[7],
         test_sensors=[40],
         normalize=True,
+        aq_backend=fake_backend,
     )
 
     assert static_data["pollutant_norm_stats"] is not None
@@ -285,6 +332,7 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
         number_of_val_sensors=1,
         add_distance_to_sensors=False,
         normalize=True,
+        aq_backend=fake_backend,
     )
 
     monkeypatch.setattr(data_module, "get_random_sensors", lambda **kwargs: (np.array([10, 30]), np.array([20]), np.array([], dtype=int)))
@@ -294,9 +342,58 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
         number_of_val_sensors=1,
         add_distance_to_sensors=False,
         normalize=True,
+        aq_backend=fake_backend,
     )
 
     assert result_one["normalization_stats"][7] == expected_stats
     assert result_two["normalization_stats"][7] == expected_stats
     np.testing.assert_allclose(result_one["test_data"], static_data["test_data"])
     np.testing.assert_allclose(result_two["test_data"], static_data["test_data"])
+
+
+def test_generate_meteo_magnitudes_aligns_all_channels_to_requested_sensor_ids(monkeypatch):
+    time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
+    sensor_ids = [10, 20]
+
+    values = {
+        83: np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        86: np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+        87: np.array([[9.0, 10.0], [11.0, 12.0]], dtype=np.float32),
+        88: np.array([[13.0, 14.0], [15.0, 16.0]], dtype=np.float32),
+        89: np.array([[17.0, 18.0], [19.0, 20.0]], dtype=np.float32),
+    }
+    masks = {mag_id: np.ones_like(data, dtype=np.float32) for mag_id, data in values.items()}
+
+    monkeypatch.setattr(
+        data_module,
+        "get_magnitudes_data",
+        lambda **kwargs: (values, masks, time_index, sensor_ids, None),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "get_data",
+        lambda **kwargs: (
+            pd.DataFrame(
+                {
+                    "sensor_id": [10, 10, 20, 20, 10, 10, 20, 20],
+                    "entry_date": list(time_index) * 4,
+                    "magnitude_id": [81, 81, 81, 81, 82, 82, 82, 82],
+                    "value": [1.0, 2.0, 3.0, 4.0, 90.0, 180.0, 270.0, 0.0],
+                }
+            ),
+            time_index,
+        ),
+    )
+    monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
+
+    grid, returned_time_index, meteo_mags = data_module.generate_meteo_magnitudes(
+        start_date=pd.Timestamp("2024-01-01 00:00:00"),
+        end_date=pd.Timestamp("2024-01-01 01:00:00"),
+        grid_ctx={"grid": np.zeros((2, 2), dtype=int)},
+        sensor_ids=sensor_ids,
+        aq_backend=object(),
+    )
+
+    assert list(returned_time_index) == list(time_index)
+    assert meteo_mags == [811, 812, 83, 86, 87, 88, 89]
+    assert grid.shape == (14, 2, 2, 2)

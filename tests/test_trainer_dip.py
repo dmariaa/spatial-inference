@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import numpy as np
 import torch
 
 from metraq_dip.trainer import trainer_dip
 
 
 def test_get_model_output_uses_all_available_steps_when_k_best_matches_epoch_count():
-    k_output = np.array([[[[[1.0]], [[3.0]], [[5.0]]]]])
-    k_val_mask = np.ones_like(k_output)
-    k_val_data = np.zeros_like(k_output)
+    k_output = torch.tensor([[[[[1.0]], [[3.0]], [[5.0]]]]])
+    k_val_mask = torch.ones_like(k_output)
+    k_val_data = torch.zeros_like(k_output)
 
     model_output, min_idx = trainer_dip.get_model_output(
         k_output=k_output,
@@ -26,12 +25,14 @@ def test_get_model_output_uses_all_available_steps_when_k_best_matches_epoch_cou
 def test_get_best_result_uses_k_best_n_from_configuration(monkeypatch):
     trainer = trainer_dip.DipTrainer(
         configuration={
+            "aq_dataset": "metraq",
+            "aq_backend": "files",
             "date": "2024-01-01T00:00:00",
             "hours": 1,
             "ensemble_size": 1,
             "pollutants": [7],
             "k_best_n": 3,
-        }
+        },
     )
 
     trainer.dip_logger = {
@@ -46,10 +47,9 @@ def test_get_best_result_uses_k_best_n_from_configuration(monkeypatch):
 
     def fake_get_model_output(*, k_output, k_val_mask, k_val_data, k_best_n):
         captured["k_best_n"] = k_best_n
-        return np.zeros((1, 1)), np.array([[0]])
+        return torch.zeros((1, 1)), torch.tensor([[0]])
 
     monkeypatch.setattr(trainer_dip, "get_model_output", fake_get_model_output)
-
     trainer.get_best_result()
 
     assert captured["k_best_n"] == 3

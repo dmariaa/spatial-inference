@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from metraq_dip.data.aq_backends import get_aq_backend_for_config
 from metraq_dip.tools.config_tools import SessionConfig, load_session_config
 from metraq_dip.tools.random_tools import (
     get_all_time_windows,
@@ -54,6 +55,7 @@ def _ensure_base_files(
 ) -> tuple[dict[str, Any], str, np.ndarray, np.ndarray, pd.DataFrame]:
     experiment_output_folder = str(config_file.parent)
     session_config = load_session_config(config_file)
+    aq_backend = get_aq_backend_for_config(session_config)
     config_base = session_config.model_dump(
         exclude={"spread_test_groups", "random_time_windows", "all_time_windows"},
     )
@@ -72,6 +74,7 @@ def _ensure_base_files(
             group_size=spread_test_groups_params.group_size,
             max_uses_per_sensor=spread_test_groups_params.max_uses_per_sensor,
             magnitudes=session_config.pollutants,
+            aq_backend=aq_backend,
         )
         time_windows = _get_time_windows(session_config)
         np.savez(data_file, test_sensors=test_sensors, time_windows=time_windows)
