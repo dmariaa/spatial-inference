@@ -372,10 +372,10 @@ venv/
 ENV/
 
 # MkDocs documentation
-site*/
+/site*/
 
 # Custom
-output/
-tmp/
-.idea/
-data/
+/output/
+/tmp/
+/.idea/
+/data/
