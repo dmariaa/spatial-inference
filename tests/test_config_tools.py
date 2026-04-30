@@ -116,6 +116,17 @@ def test_session_config_rejects_unsupported_aq_backend_pair():
         SessionConfig.model_validate(payload)
 
 
+def test_session_config_accepts_barcelona_files_backend():
+    payload = _base_config()
+    payload["aq_dataset"] = "barcelona"
+    payload["aq_backend"] = "files"
+
+    config = SessionConfig.model_validate(payload)
+
+    assert config.aq_dataset == "barcelona"
+    assert config.aq_backend == "files"
+
+
 def test_build_trainer_config_injects_runtime_fields():
     session_config = SessionConfig.model_validate(_base_config())
 

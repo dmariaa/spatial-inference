@@ -8,6 +8,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from metraq_dip.data.airparif_files import airparif_files
+from metraq_dip.data.barcelona_files import barcelona_files
 from metraq_dip.data.metraq_db_legacy import metraq_db as metraq_db_legacy
 from metraq_dip.data.metraq_files import metraq_files
 
@@ -188,8 +189,38 @@ class AirparifFilesBackend:
         return airparif_files.get_magnitude_bounds(magnitudes)
 
 
+class BarcelonaFilesBackend:
+    dataset_name = "barcelona"
+    backend_name = "files"
+
+    def get_sensors(
+        self,
+        *,
+        magnitudes: list[int] | None = None,
+        sensors: list[int] | None = None,
+    ) -> pd.DataFrame:
+        return barcelona_files.get_sensors(magnitudes=magnitudes, sensors=sensors)
+
+    def get_measurements(
+        self,
+        *,
+        start_date: datetime,
+        end_date: datetime,
+        magnitudes: list[int],
+    ) -> pd.DataFrame:
+        return barcelona_files.get_measurements(
+            start_date=start_date,
+            end_date=end_date,
+            magnitudes=magnitudes,
+        )
+
+    def get_magnitude_bounds(self, magnitudes: list[int]) -> dict[int, tuple[float, float]]:
+        return barcelona_files.get_magnitude_bounds(magnitudes)
+
+
 _BACKENDS: dict[tuple[str, str], AQBackend] = {
     ("airparif", "files"): AirparifFilesBackend(),
+    ("barcelona", "files"): BarcelonaFilesBackend(),
     ("metraq", "files"): MetraqFilesBackend(),
     ("metraq", "db"): MetraqDbBackend(),
 }

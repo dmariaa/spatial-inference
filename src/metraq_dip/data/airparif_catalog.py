@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -23,15 +24,32 @@ DEFAULT_PARIS_CENTER_LON = 2.3522
 DEFAULT_METRIC_CRS = "EPSG:32631"
 
 
-def _iter_raw_no2_files(raw_dir: Path) -> list[Path]:
-    files: list[tuple[int, Path]] = []
-    for path in sorted(raw_dir.glob("*-NO2.csv")):
-        match = re.match(r"(?P<year>\d{4})-NO2\.csv$", path.name)
+@dataclass(frozen=True)
+class AirparifRawFile:
+    year: int
+    pollutant_code: str
+    path: Path
+
+
+def _iter_airparif_raw_files(raw_dir: Path) -> list[AirparifRawFile]:
+    files: list[AirparifRawFile] = []
+    for path in sorted(raw_dir.glob("*.csv")):
+        if path.name == DEFAULT_COORDS_PATH.name:
+            continue
+
+        match = re.match(r"(?P<year>\d{4})-(?P<pollutant>[A-Za-z0-9_-]+)\.csv$", path.name)
         if match is None:
             continue
-        files.append((int(match.group("year")), path))
 
-    return [path for _, path in sorted(files)]
+        files.append(
+            AirparifRawFile(
+                year=int(match.group("year")),
+                pollutant_code=match.group("pollutant").strip().upper(),
+                path=path,
+            )
+        )
+
+    return sorted(files, key=lambda item: (item.year, item.pollutant_code, item.path.name))
 
 
 def _read_header_rows(csv_path: Path, *, n_rows: int = 6) -> list[list[str]]:
@@ -47,13 +65,8 @@ def _read_header_rows(csv_path: Path, *, n_rows: int = 6) -> list[list[str]]:
     return rows
 
 
-def _parse_header_inventory(csv_path: Path) -> pd.DataFrame:
-    year_match = re.match(r"(?P<year>\d{4})-NO2\.csv$", csv_path.name)
-    if year_match is None:
-        raise ValueError(f"Unexpected AIRPARIF file name: {csv_path.name}")
-
-    year = int(year_match.group("year"))
-    header_rows = _read_header_rows(csv_path)
+def _parse_header_inventory(raw_file: AirparifRawFile) -> pd.DataFrame:
+    header_rows = _read_header_rows(raw_file.path)
     width = max(len(row) for row in header_rows)
     normalized_rows = [row + [""] * (width - len(row)) for row in header_rows]
 
@@ -82,12 +95,12 @@ def _parse_header_inventory(csv_path: Path) -> pd.DataFrame:
 
         records.append(
             {
-                "year": year,
+                "year": raw_file.year,
                 "station_code": code,
                 "station_name": station_name.strip() or code,
                 "combined_code": combined_code.strip(),
-                "pollutant_code": pollutant_code.strip(),
-                "pollutant_name": pollutant_name.strip(),
+                "pollutant_code": pollutant_code.strip().upper() or raw_file.pollutant_code,
+                "pollutant_name": pollutant_name.strip() or raw_file.pollutant_code,
                 "unit": unit.strip(),
             }
         )
@@ -96,14 +109,14 @@ def _parse_header_inventory(csv_path: Path) -> pd.DataFrame:
 
 
 def _load_inventory(raw_dir: Path) -> pd.DataFrame:
-    frames = [_parse_header_inventory(path) for path in _iter_raw_no2_files(raw_dir)]
+    frames = [_parse_header_inventory(raw_file) for raw_file in _iter_airparif_raw_files(raw_dir)]
     if not frames:
         raise FileNotFoundError(
-            f"No AIRPARIF NO2 files found in {raw_dir}. Expected files like 2018-NO2.csv."
+            f"No AIRPARIF pollutant files found in {raw_dir}. Expected files like 2018-NO2.csv."
         )
 
     inventory = pd.concat(frames, ignore_index=True)
-    inventory = inventory.sort_values(["station_code", "year"]).reset_index(drop=True)
+    inventory = inventory.sort_values(["station_code", "year", "pollutant_code"]).reset_index(drop=True)
     return inventory
 
 
@@ -124,6 +137,11 @@ def _load_coordinates(coords_path: Path) -> pd.DataFrame:
 
 def _years_to_text(years: Iterable[int]) -> str:
     return ",".join(str(int(year)) for year in sorted(set(years)))
+
+
+def _text_join(values: pd.Series) -> str:
+    normalized = sorted({str(value).strip() for value in values if str(value).strip()})
+    return ",".join(normalized)
 
 
 def _assign_stable_ids(df: pd.DataFrame, existing_catalog_path: Path | None) -> pd.DataFrame:
@@ -221,9 +239,9 @@ def build_airparif_station_catalog(
         inventory.groupby("station_code", sort=True)
         .agg(
             station_name=("station_name", "first"),
-            pollutant_code=("pollutant_code", "first"),
-            pollutant_name=("pollutant_name", "first"),
-            unit=("unit", "first"),
+            pollutant_codes=("pollutant_code", _text_join),
+            pollutant_names=("pollutant_name", _text_join),
+            units=("unit", _text_join),
             years_present=("year", lambda values: tuple(sorted({int(v) for v in values}))),
         )
         .reset_index()
@@ -233,6 +251,9 @@ def build_airparif_station_catalog(
     grouped["first_year_present"] = grouped["years_present"].apply(lambda years: int(years[0]))
     grouped["last_year_present"] = grouped["years_present"].apply(lambda years: int(years[-1]))
     grouped["years_present"] = grouped["years_present"].apply(_years_to_text)
+    grouped["n_pollutants_present"] = grouped["pollutant_codes"].apply(
+        lambda value: len([item for item in str(value).split(",") if item])
+    ).astype(int)
     grouped["is_common_2018_2024"] = grouped["years_present"].apply(
         lambda years_text: common_years_set.issubset({int(year) for year in years_text.split(",") if year})
     )
@@ -257,6 +278,7 @@ def build_airparif_station_catalog(
         catalog.loc[coords_mask, "utm_y"] = utm_y
 
     catalog["metric_crs"] = metric_crs
+    catalog["source_dataset"] = "airparif"
     catalog["distance_to_paris_center_km"] = np.nan
     if coords_mask.any():
         catalog.loc[coords_mask, "distance_to_paris_center_km"] = _haversine_km(
@@ -280,6 +302,16 @@ def build_airparif_station_catalog(
         experiment_radius_km=experiment_radius_km,
     )
 
+    fill_text_columns = ["pollutant_codes", "pollutant_names", "units", "years_present"]
+    for column in fill_text_columns:
+        if column in catalog.columns:
+            catalog[column] = catalog[column].fillna("")
+
+    fill_count_columns = ["n_years_present", "n_pollutants_present"]
+    for column in fill_count_columns:
+        if column in catalog.columns:
+            catalog[column] = catalog[column].fillna(0).astype(int)
+
     catalog = _assign_stable_ids(catalog.sort_values("station_code").reset_index(drop=True), existing_catalog_path)
     catalog = catalog.sort_values("id").reset_index(drop=True)
     catalog = catalog[
@@ -288,15 +320,17 @@ def build_airparif_station_catalog(
             "station_code",
             "station_name",
             "name",
-            "pollutant_code",
-            "pollutant_name",
-            "unit",
             "latitude",
             "longitude",
             "utm_x",
             "utm_y",
             "metric_crs",
+            "source_dataset",
             "source",
+            "pollutant_codes",
+            "pollutant_names",
+            "units",
+            "n_pollutants_present",
             "years_present",
             "n_years_present",
             "first_year_present",

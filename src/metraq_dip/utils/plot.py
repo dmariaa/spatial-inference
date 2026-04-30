@@ -1,12 +1,50 @@
 import math
+import warnings
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 import numpy as np
 from plotly import graph_objects as go
 from plotly.subplots import make_subplots
+from pyproj import Transformer
 
+from metraq_dip.data.aq_backends import get_aq_backend_for_config
 from metraq_dip.data.data import get_grid
-from metraq_dip.tools.grid import TO_DEG, find_grid_cell
+from metraq_dip.tools.config_tools import SessionConfig, load_session_config
+from metraq_dip.tools.grid import DEFAULT_METRIC_CRS, find_grid_cell
+from metraq_dip.tools.random_tools import sensor_group_hash
+
+
+@dataclass(frozen=True)
+class ExperimentSensorGroups:
+    experiment_folder: Path
+    config: SessionConfig
+    grid_ctx: dict
+    sensor_ids: list[int]
+    sensor_groups: list[dict[str, list[int]]]
+    group_labels: list[str]
+
+
+@lru_cache(maxsize=None)
+def _get_to_deg_transformer(metric_crs: str) -> Transformer:
+    normalized = str(metric_crs).strip() or DEFAULT_METRIC_CRS
+    return Transformer.from_crs(normalized, "epsg:4326", always_xy=True)
+
+
+def _resolve_group_labels(
+    sensor_groups: Sequence[dict],
+    group_labels: Optional[Sequence[str]],
+) -> list[str]:
+    labels = (
+        list(group_labels)
+        if group_labels is not None
+        else [sensor_group_hash(group.get("test_sensors", [])) for group in sensor_groups]
+    )
+    if len(labels) != len(sensor_groups):
+        raise ValueError("group_labels length must match sensor_groups length")
+    return labels
 
 
 def _build_id_to_cell(grid_ctx: dict) -> dict[int, tuple[int, int]]:
@@ -67,8 +105,10 @@ def _cell_ring_ll(grid_ctx: dict, cell: tuple[int, int]) -> Optional[list[tuple[
     cell_obj = grid[r, c]
     if cell_obj is None:
         return None
+
+    to_deg = _get_to_deg_transformer(grid_ctx.get("metric_crs", DEFAULT_METRIC_CRS))
     x_coords, y_coords = cell_obj.exterior.coords.xy
-    lons, lats = TO_DEG.transform(np.array(x_coords), np.array(y_coords))
+    lons, lats = to_deg.transform(np.array(x_coords), np.array(y_coords))
     return list(zip(lats.tolist(), lons.tolist()))
 
 
@@ -123,6 +163,98 @@ def _grid_lines_trace(grid_ctx: dict, line_color: str, line_width: int) -> go.Sc
     )
 
 
+def _normalize_test_sensor_groups(raw_groups: np.ndarray) -> list[list[int]]:
+    if raw_groups.ndim == 0:
+        raise ValueError("data.npz must store test_sensors as an array of sensor groups.")
+
+    if raw_groups.ndim == 1:
+        first_item = raw_groups[0] if raw_groups.size else None
+        if raw_groups.dtype != object or np.isscalar(first_item):
+            groups_iterable = [raw_groups]
+        else:
+            groups_iterable = raw_groups.tolist()
+    else:
+        groups_iterable = raw_groups.tolist()
+
+    normalized_groups: list[list[int]] = []
+    for group in groups_iterable:
+        group_array = np.asarray(group).reshape(-1)
+        if group_array.size == 0:
+            raise ValueError("test_sensors contains an empty sensor group.")
+        normalized_groups.append([int(sensor_id) for sensor_id in group_array.tolist()])
+
+    if not normalized_groups:
+        raise ValueError("data.npz does not contain any test sensor groups.")
+
+    return normalized_groups
+
+
+def load_experiment_sensor_groups(
+    experiment_folder: str | Path,
+    *,
+    include_train_sensors: bool = True,
+    group_labels: Optional[Sequence[str]] = None,
+) -> ExperimentSensorGroups:
+    experiment_path = Path(experiment_folder)
+    config_path = experiment_path / "config.yaml"
+    data_path = experiment_path / "data.npz"
+
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Experiment config file not found: {config_path}")
+    if not data_path.is_file():
+        raise FileNotFoundError(f"Experiment data file not found: {data_path}")
+
+    config = load_session_config(config_path)
+    aq_backend = get_aq_backend_for_config(config)
+    grid_ctx, sensor_ids = get_grid(pollutants=list(config.pollutants), aq_backend=aq_backend)
+
+    with np.load(data_path, allow_pickle=True) as data:
+        if "test_sensors" not in data.files:
+            raise ValueError(f"Experiment data file does not contain 'test_sensors': {data_path}")
+        raw_groups = _normalize_test_sensor_groups(data["test_sensors"])
+
+    sensor_id_set = {int(sensor_id) for sensor_id in sensor_ids}
+    resolved_labels = _resolve_group_labels(
+        [{"test_sensors": group} for group in raw_groups],
+        group_labels,
+    )
+
+    sensor_groups: list[dict[str, list[int]]] = []
+    for group in raw_groups:
+        missing_sensors = [sensor_id for sensor_id in group if sensor_id not in sensor_id_set]
+        if missing_sensors:
+            warnings.warn(
+                "Discarding sensor ids that are not available in the configured backend grid: "
+                f"{missing_sensors}",
+                stacklevel=2,
+            )
+
+        test_sensors = [sensor_id for sensor_id in group if sensor_id in sensor_id_set]
+        group_sensor_set = set(group)
+        train_sensors = (
+            [int(sensor_id) for sensor_id in sensor_ids if int(sensor_id) not in group_sensor_set]
+            if include_train_sensors
+            else []
+        )
+
+        sensor_groups.append(
+            {
+                "train_sensors": train_sensors,
+                "val_sensors": [],
+                "test_sensors": test_sensors,
+            }
+        )
+
+    return ExperimentSensorGroups(
+        experiment_folder=experiment_path,
+        config=config,
+        grid_ctx=grid_ctx,
+        sensor_ids=[int(sensor_id) for sensor_id in sensor_ids],
+        sensor_groups=sensor_groups,
+        group_labels=resolved_labels,
+    )
+
+
 def plot_sensor_groups(
     *,
     grid_ctx: dict,
@@ -134,7 +266,7 @@ def plot_sensor_groups(
     grid_line_color: str = "#cccccc",
     subplot_size: int = 480,
     subplot_gap: float = 0.02,
-    output_path: Optional[str] = None,
+    output_path: Optional[str | Path] = None,
 ) -> go.Figure:
     """
     Plot sensor groups on a grid as colored cells.
@@ -152,9 +284,7 @@ def plot_sensor_groups(
         n_cols = int(math.ceil(math.sqrt(n_groups)))
     n_rows = int(math.ceil(n_groups / n_cols))
 
-    labels = list(group_labels) if group_labels is not None else [f"{sensor_group_hash(s) }" for s in sensor_groups]
-    if len(labels) != n_groups:
-        raise ValueError("group_labels length must match sensor_groups length")
+    labels = _resolve_group_labels(sensor_groups, group_labels)
 
     grid_shape = grid_ctx["grid"].shape
     id_to_cell = _build_id_to_cell(grid_ctx)
@@ -170,11 +300,11 @@ def plot_sensor_groups(
     colorscale = [
         [0.0, "#ffffff"],
         [0.249, "#ffffff"],
-        [0.25, "#d62728"],   # train
+        [0.25, "#d62728"],
         [0.499, "#d62728"],
-        [0.5, "#ffeb3b"],    # validation
+        [0.5, "#ffeb3b"],
         [0.749, "#ffeb3b"],
-        [0.75, "#2ca02c"],   # test
+        [0.75, "#2ca02c"],
         [1.0, "#2ca02c"],
     ]
 
@@ -257,7 +387,7 @@ def plot_sensor_groups_map(
     grid_line_color: str = "rgba(0,0,0,0.25)",
     grid_line_width: int = 1,
     html_config: Optional[dict] = None,
-    output_path: Optional[str] = None,
+    output_path: Optional[str | Path] = None,
 ) -> go.Figure:
     """
     Plot sensor groups on a map background, coloring each grid cell.
@@ -275,10 +405,7 @@ def plot_sensor_groups_map(
         n_cols = int(math.ceil(math.sqrt(n_groups)))
     n_rows = int(math.ceil(n_groups / n_cols))
 
-    labels = list(group_labels) if group_labels is not None else [f"{sensor_group_hash(s['test_sensors']) }" for s in sensor_groups]
-    if len(labels) != n_groups:
-        raise ValueError("group_labels length must match sensor_groups length")
-
+    labels = _resolve_group_labels(sensor_groups, group_labels)
     id_to_cell = _build_id_to_cell(grid_ctx)
     cell_rings: dict[tuple[int, int], list[tuple[float, float]]] = {}
 
@@ -370,11 +497,12 @@ def plot_sensor_groups_map(
 
         fig.add_trace(_grid_lines_trace(grid_ctx, grid_line_color, grid_line_width), row=row, col=col)
 
+    to_deg = _get_to_deg_transformer(grid_ctx.get("metric_crs", DEFAULT_METRIC_CRS))
     minx, miny, maxx, maxy = grid_ctx["bbox"].bounds
-    center_lon, center_lat = TO_DEG.transform((minx + maxx) / 2, (miny + maxy) / 2)
+    center_lon, center_lat = to_deg.transform((minx + maxx) / 2, (miny + maxy) / 2)
     bounds = None
     if zoom is None:
-        corner_lons, corner_lats = TO_DEG.transform(
+        corner_lons, corner_lats = to_deg.transform(
             np.array([minx, minx, maxx, maxx]),
             np.array([miny, maxy, miny, maxy]),
         )
@@ -418,28 +546,208 @@ def plot_sensor_groups_map(
     return fig
 
 
-if __name__=="__main__":
-    from metraq_dip.data.aq_backends import get_aq_backend
-    from metraq_dip.tools.random_tools import get_spread_test_groups, sensor_group_hash
-
-    aq_backend = get_aq_backend(dataset="metraq", backend="files")
-    grid_ctx, sensor_ids = get_grid(aq_backend=aq_backend)
-    test_sensors, _ = get_spread_test_groups(
-        n_groups=10,
-        group_size=4,
-        max_uses_per_sensor=2,
-        magnitudes=[7],
-        aq_backend=aq_backend,
+def plot_experiment_sensor_groups(
+    experiment_folder: str | Path,
+    *,
+    include_train_sensors: bool = True,
+    group_labels: Optional[Sequence[str]] = None,
+    **plot_kwargs,
+) -> go.Figure:
+    loaded = load_experiment_sensor_groups(
+        experiment_folder,
+        include_train_sensors=include_train_sensors,
+        group_labels=group_labels,
     )
-    sensor_groups_list = []
+    return plot_sensor_groups(
+        grid_ctx=loaded.grid_ctx,
+        sensor_groups=loaded.sensor_groups,
+        group_labels=loaded.group_labels,
+        **plot_kwargs,
+    )
 
-    for sensor_group in test_sensors:
-        available_sensors = [sid for sid in sensor_ids if sid not in sensor_group]
-        sensor_groups_list.append({
-            "train_sensors": available_sensors,
-            "val_sensors": [],
-            "test_sensors": sensor_group
-        })
 
-    fig = plot_sensor_groups_map(grid_ctx=grid_ctx, sensor_groups=sensor_groups_list, n_cols=4)
-    fig.write_image("sensor_groups_hrz.png", width=fig.layout.width, height=fig.layout.height, scale=2)
+def plot_experiment_sensor_groups_map(
+    experiment_folder: str | Path,
+    *,
+    include_train_sensors: bool = True,
+    group_labels: Optional[Sequence[str]] = None,
+    **plot_kwargs,
+) -> go.Figure:
+    loaded = load_experiment_sensor_groups(
+        experiment_folder,
+        include_train_sensors=include_train_sensors,
+        group_labels=group_labels,
+    )
+    return plot_sensor_groups_map(
+        grid_ctx=loaded.grid_ctx,
+        sensor_groups=loaded.sensor_groups,
+        group_labels=loaded.group_labels,
+        **plot_kwargs,
+    )
+
+
+def write_figure_outputs(
+    *,
+    fig: go.Figure,
+    outdir: Path,
+    stem: str = "sensor_groups_map",
+    html: bool = True,
+    static_format: str | None = None,
+    html_config: Optional[dict] = None,
+    scale: int = 2,
+) -> list[Path]:
+    if not html and static_format is None:
+        raise ValueError("At least one output must be enabled: HTML or a static format.")
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    written_paths: list[Path] = []
+
+    if html:
+        html_path = outdir / f"{stem}.html"
+        fig.write_html(html_path, config=html_config)
+        written_paths.append(html_path)
+
+    if static_format:
+        static_path = outdir / f"{stem}.{static_format}"
+        width = int(fig.layout.width) if fig.layout.width is not None else 1200
+        height = int(fig.layout.height) if fig.layout.height is not None else 800
+        fig.write_image(static_path, width=width, height=height, scale=scale)
+        written_paths.append(static_path)
+
+    return written_paths
+
+
+def main(
+    *,
+    experiment_folder: str | Path,
+    outdir: Path | None = None,
+    title: str | None = None,
+    n_cols: int | None = None,
+    include_train_sensors: bool = True,
+    fixed_view: bool = True,
+    map_style: str = "carto-positron",
+    zoom: float | None = None,
+    html: bool = True,
+    static_format: str | None = None,
+) -> list[Path]:
+    experiment_path = Path(experiment_folder)
+    if outdir is None:
+        outdir = experiment_path / "plots"
+
+    fig = plot_experiment_sensor_groups_map(
+        experiment_path,
+        include_train_sensors=include_train_sensors,
+        n_cols=n_cols,
+        title=title,
+        fixed_view=fixed_view,
+        map_style=map_style,
+        zoom=zoom,
+    )
+
+    html_config = {"scrollZoom": False, "displayModeBar": False} if fixed_view else None
+    return [
+        path.resolve()
+        for path in write_figure_outputs(
+            fig=fig,
+            outdir=outdir,
+            stem="sensor_groups_map",
+            html=html,
+            static_format=static_format,
+            html_config=html_config,
+        )
+    ]
+
+
+if __name__ == "__main__":
+    import click
+
+    @click.command()
+    @click.argument(
+        "experiment_folder",
+        type=click.Path(exists=True, file_okay=False, dir_okay=True, readable=True, path_type=Path),
+    )
+    @click.option(
+        "--outdir",
+        type=click.Path(file_okay=False, dir_okay=True, writable=True, path_type=Path),
+        default=None,
+        help="Directory for rendered map files. Defaults to EXPERIMENT_FOLDER/plots.",
+    )
+    @click.option(
+        "--title",
+        default=None,
+        help="Optional figure title override.",
+    )
+    @click.option(
+        "--n-cols",
+        type=click.IntRange(min=1),
+        default=None,
+        help="Number of subplot columns. Defaults to a square-ish layout.",
+    )
+    @click.option(
+        "--include-train/--test-only",
+        default=True,
+        show_default=True,
+        help="Show non-test cells in red. Use --test-only to render only unseen cells.",
+    )
+    @click.option(
+        "--fixed-view/--interactive",
+        default=True,
+        show_default=True,
+        help="Disable map dragging/scroll zoom in the HTML output.",
+    )
+    @click.option(
+        "--map-style",
+        default="carto-positron",
+        show_default=True,
+        help="Plotly map style name.",
+    )
+    @click.option(
+        "--zoom",
+        type=float,
+        default=None,
+        help="Optional fixed zoom level. If omitted, the figure fits the grid bounds.",
+    )
+    @click.option(
+        "--static-format",
+        type=click.Choice(["png", "svg", "pdf"], case_sensitive=True),
+        default=None,
+        help="Optional static image format to export alongside HTML.",
+    )
+    @click.option(
+        "--html/--no-html",
+        default=True,
+        show_default=True,
+        help="Write the interactive HTML output.",
+    )
+    def cli(
+        experiment_folder: Path,
+        outdir: Path | None,
+        title: str | None,
+        n_cols: int | None,
+        include_train: bool,
+        fixed_view: bool,
+        map_style: str,
+        zoom: float | None,
+        static_format: str | None,
+        html: bool,
+    ) -> None:
+        try:
+            written_paths = main(
+                experiment_folder=experiment_folder,
+                outdir=outdir,
+                title=title,
+                n_cols=n_cols,
+                include_train_sensors=include_train,
+                fixed_view=fixed_view,
+                map_style=map_style,
+                zoom=zoom,
+                html=html,
+                static_format=static_format,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        for path in written_paths:
+            click.echo(f"Wrote: {path}")
+
+    cli()
