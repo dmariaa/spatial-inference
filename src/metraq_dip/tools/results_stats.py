@@ -22,12 +22,18 @@ def get_experiment_name(sensor_group_key: str, time_window: datetime) -> str:
 def compute_results_data_stats(
     *,
     train_data: np.ndarray,
+    val_data: np.ndarray,
     train_mask: np.ndarray,
     val_mask: np.ndarray,
 ) -> dict[str, float]:
     train_data_array = np.asarray(train_data, dtype=float)
-    observed_mask = np.asarray(train_mask, dtype=bool) | np.asarray(val_mask, dtype=bool)
-    observed_data = np.max(train_data_array, axis=0)[observed_mask.any(axis=0)]
+    val_data_array = np.asarray(val_data, dtype=float)
+    train_mask_array = np.asarray(train_mask, dtype=bool)
+    val_mask_array = np.asarray(val_mask, dtype=bool)
+
+    observed_mask = train_mask_array | val_mask_array
+    observed_data_array = np.where(train_mask_array, train_data_array, val_data_array)
+    observed_data = np.max(observed_data_array, axis=0)[observed_mask.any(axis=0)]
 
     if observed_data.size == 0:
         raise ValueError("Cannot compute results data stats from an empty observed mask.")
@@ -62,6 +68,7 @@ def load_experiment_result_stats(experiment_file: str | Path) -> dict[str, float
         )
         return compute_results_data_stats(
             train_data=experiment_data[train_data_key],
+            val_data=experiment_data["val_data"],
             train_mask=train_mask,
             val_mask=val_mask,
         )

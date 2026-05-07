@@ -6,8 +6,22 @@ exclude_docs: |
   queries.sql
 theme:
   name: mkdocs
+extra_css:
+  - stylesheets/extra.css
 nav:
   - Home: index.md
-  - Experiments Schema: experiments.md
-  - Experiment Results: experiment_results.md
-  - Notes: cosas.md
+  - Experiments:
+      - Overview: experiment_sets.md
+      - Artifacts Schema: experiments.md
+      - METRAQ NO:
+          - Overview: experiments_NO/index.md
+          - Performance Summary: experiments_NO/summary_tables/summary_paper_performance.md
+          - Window Diagnostics: experiments_NO/window_diagnostics/summary.md
+      - Cross-Dataset UNet:
+          - Overview: cross_dataset_no2_nox_unet/index.md
+          - Performance Summary: cross_dataset_no2_nox_unet/summary_paper_performance.md
+          - Window Diagnostics: cross_dataset_no2_nox_unet/window_diagnostics/summary.md
+      - Cross-Dataset Autoencoder:
+          - Overview: cross_dataset_no2_nox_autoencoder/index.md
+          - Performance Summary: cross_dataset_no2_nox_autoencoder/summary_paper_performance.md
+          - Window Diagnostics: cross_dataset_no2_nox_autoencoder/window_diagnostics/summary.md

@@ -1,0 +1,37 @@
+@media (min-width: 992px) {
+  .container {
+    width: min(96vw, 1760px);
+    max-width: 1760px;
+  }
+
+  .col-md-3 {
+    width: 14%;
+  }
+
+  .col-md-9 {
+    width: 86%;
+  }
+}
+
+@media (min-width: 1400px) {
+  .col-md-3 {
+    width: 12%;
+  }
+
+  .col-md-9 {
+    width: 88%;
+  }
+}
+
+[role="main"] table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.9em;
+}
+
+[role="main"] table th,
+[role="main"] table td {
+  padding: 0.45rem 0.6rem;
+}

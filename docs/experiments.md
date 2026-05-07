@@ -1,155 +1,159 @@
 # Experiments
 
-`src/metraq_dip/experiments.py` creates one session folder under `output/experiments/<experiment_name>/`.
-That folder contains the session configuration, the generated experiment grid, one summary CSV, and one detailed `.npz` file per processed experiment.
+`src/metraq_dip/experiments.py` runs one configured experiment session.
+The session folder is the directory containing the `config.yaml` passed to `run_experiments(config_file=...)`.
+That folder is reused for generated grid data, the aggregate result CSV, failure logs, and one compressed `.npz` artifact per processed `(sensor_group, time_window)` row.
 
-With the current defaults in `run_experiments()`:
-
-| Item | Value |
-| --- | ---: |
-| Sensor groups generated | 10 |
-| Sensors per group | 4 |
-| Time windows generated | 240 |
-| Total experiment combinations | 2400 |
-| Expected rows in `results.csv` | 2400 |
-| Max detailed `exp_*.npz` files | 2400 |
+The number of sensor groups, sensors per group, and time windows is config-driven. Current sessions use either `random_time_windows` or `all_time_windows` plus `spread_test_groups`; the runner does not hard-code a fixed 2400-row grid.
 
 ## Output Folder Structure
 
 | File / pattern | Count | Created by | Purpose |
 | --- | ---: | --- | --- |
-| `config.yaml` | 1 | `run_experiments()` | Stores the base configuration for the whole session. |
-| `data.npz` | 1 | `run_experiments()` | Stores the generated experiment grid: sensor groups and time windows. |
-| `results.csv` | 1 | `run_experiments()` | Stores one summary row per `(sensor_group, time_window)` experiment. |
-| `exp_<sensor_group>_<timestamp>.npz` | Up to 2400 | `run_experiments()` | Stores the detailed arrays, masks, predictions, and losses for one experiment. |
-| `video.html` | 0 or 1 | `src/metraq_dip/tools/plot.py` | Optional visualization generated later by the plotting CLI. It is not created by `run_experiments()`. |
+| `config.yaml` | 1 | user/session setup | Defines session configuration. |
+| `data.npz` | 1 | `_ensure_base_files()` | Stores generated `test_sensors` and `time_windows`. Reused on resume. |
+| `results.csv` | 1 | `_ensure_base_files()` and `run_experiments()` | Stores one summary row per scheduled `(sensor_group, time_window)` experiment. Updated after each successful run. |
+| `exp_<sensor_group>_<timestamp>.npz` | up to one per row | `_run_single_experiment()` | Stores detailed arrays, masks, predictions, losses, and normalization metadata for one experiment. |
+| `failures.log` | 0 or 1 | `run_experiments()` | Written when one or more jobs fail. Removed at the start of a run. |
+| `video.html` | 0 or 1 | `src/metraq_dip/utils/plot_surface_video.py` | Optional Plotly visualization for the first experiment artifact in the session folder. |
+| `video_unnormalized.html` | 0 or 1 | `src/metraq_dip/utils/plot_surface_video.py --unnormalize` | Optional Plotly visualization in original units when saved normalization stats are available. |
 
 ## `config.yaml`
 
-This file stores the session-level configuration.
-Per-experiment values such as `date`, `validation_sensors`, and `test_sensors` are injected at runtime and are not written back into `config.yaml`.
+This file stores session-level configuration.
+Runtime values such as `date`, `validation_sensors`, and `test_sensors` are injected per experiment and are not written back into `config.yaml`.
 
-| Key | Type | Example | Meaning |
-| --- | --- | --- | --- |
-| `pollutants` | `list[int]` | `[7]` | Pollutant channels used in the experiment. |
-| `hours` | `int` | `24` | Length of the temporal input window used by the trainer. |
-| `epochs` | `int` | `250` | Training iterations per ensemble member. |
-| `ensemble_size` | `int` | `5` | Number of independent runs combined inside each experiment. |
-| `lr` | `float` | `0.01` | Adam learning rate. |
-| `optimization_loss` | `string` | `mae`, `mse`, or `rmse` | Loss used for backpropagation during DIP training. |
-| `normalize` | `bool` | `false` | Enables dataset normalization when true. |
-| `add_meteo` | `bool` | `false` | Adds meteorological input channels. |
-| `add_time_channels` | `bool` | `false` | Adds time-derived channels. |
-| `add_coordinates` | `bool` | `false` | Adds coordinate channels. |
-| `add_distance_to_sensors` | `bool` | `false` or `true` | Adds distance-to-sensor channels. |
-| `model.architecture` | `string` | `autoencoder` or `unet` | Selects which DIP backbone is instantiated. |
-| `model.base_channels` | `int` | `16` | Base width of the model. |
-| `model.levels` | `int` | `3` | Number of encoder/decoder levels. |
-| `model.preserve_time` | `bool` | `false` | Controls how the model preserves the time axis. |
-| `model.learned_upsampling` | `bool` | `false` | Enables learned upsampling when true. |
-| `model.skip_connections` | `bool` | `false` or `true` | Enables skip connections in the autoencoder. This key is only valid when `model.architecture = autoencoder`. |
-| `k_best_n` | `int` (optional) | `3` or `10` | Controls how many of the lowest-validation checkpoints are averaged when `trainer_dip.py` builds the final DIP output. If omitted, the trainer defaults to `10`. |
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `aq_dataset` | `string` | Dataset family used by the air-quality backend. |
+| `aq_backend` | `string` | Concrete air-quality backend. |
+| `pollutants` | `list[int]` | Pollutant channel ids used in the experiment. |
+| `hours` | `int` | Length of the temporal input window. |
+| `epochs` | `int` | Training iterations per ensemble member. |
+| `ensemble_size` | `int` | Number of independent optimizer members. |
+| `lr` | `float` | Adam learning rate. |
+| `optimization_loss` | `mae`, `mse`, or `rmse` | Loss used for optimization. |
+| `normalize` | `bool` | Enables dataset normalization when true. |
+| `add_meteo` | `bool` | Adds meteorological input channels. |
+| `add_time_channels` | `bool` | Adds time-derived channels. |
+| `add_coordinates` | `bool` | Adds coordinate channels. |
+| `add_distance_to_sensors` | `bool` | Adds distance-to-sensor channels. |
+| `add_traffic_data` | `bool` | Adds traffic input channels. |
+| `k_best_n` | `int`, optional | Number of lowest-validation epochs averaged per ensemble member; defaults to `10` when omitted. |
+| `model.architecture` | `autoencoder` or `unet` | DIP backbone. |
+| `model.base_channels` | `int` | Base model width. |
+| `model.levels` | `int` | Encoder/decoder depth. |
+| `model.preserve_time` | `bool` | Controls whether the model preserves the time axis. |
+| `model.learned_upsampling` | `bool` | Enables learned upsampling. |
+| `model.skip_connections` | `bool`, autoencoder only | Enables autoencoder skip connections. |
+| `spread_test_groups.*` | object | Controls held-out sensor group generation. |
+| `random_time_windows.*` | object, optional | Generates sampled windows for a year. |
+| `all_time_windows.*` | object, optional | Generates all windows for selected start hours. |
 
 ## `data.npz`
 
-This file defines the full experiment grid for the session.
-In the sample data, it contains `10` sensor groups and `240` time windows.
+This file defines the scheduled experiment grid for the session.
 
 | Array | Type | Typical shape | Description |
 | --- | --- | --- | --- |
-| `test_sensors` | `int64` | `(10, 4)` | Matrix of held-out sensor groups. Each row is one group of 4 sensors used as `test_sensors`. |
-| `time_windows` | `object` | `(240,)` | Sequence of experiment timestamps. Each value becomes the per-experiment `date`. |
+| `test_sensors` | integer array | `(G, S)` | Matrix of held-out sensor groups. Each row becomes one `test_sensors` list. |
+| `time_windows` | datetime-like object array | `(T,)` | Sequence of experiment timestamps. Each value becomes the per-experiment `date`. |
 
 ## `results.csv`
 
-This is the main session summary table.
-It contains one row for each `(sensor_group, time_window)` combination.
+This is the aggregate session table.
+It contains one row per scheduled `(sensor_group, time_window)` pair and is safe for resume/restart workflows.
 
-| Column | Type | Example | Description |
-| --- | --- | --- | --- |
-| `time_window` | datetime-like string | `2024-01-02 08:00:00` | Timestamp of the experiment. Matches one entry from `data.npz`. |
-| `sensor_group` | string | `28079024-28079027-28079054-28079058` | Hyphen-joined identifier for the held-out sensor group. |
-| `processed` | bool | `True` | `False` until that experiment finishes. Useful for resume/restart behavior. |
-| `DIP_L1Loss` | float | `8.4697294235` | Final DIP MAE on the test mask. |
-| `DIP_MSELoss` | float | `72.9163894653` | Final DIP MSE on the test mask. |
-| `KRG_L1Loss` | float | `31.0703506470` | Kriging MAE baseline. |
-| `KRG_MSELoss` | float | `1141.9763183594` | Kriging MSE baseline. |
-| `IDW_L1Loss` | float | `28.0357666016` | Inverse-distance weighting MAE baseline. |
-| `IDW_MSELoss` | float | `884.3475952148` | Inverse-distance weighting MSE baseline. |
+| Column | Type | Description |
+| --- | --- | --- |
+| `time_window` | datetime-like string | Experiment timestamp. |
+| `sensor_group` | string | Hyphen-joined held-out sensor ids. |
+| `processed` | bool-like | True after the experiment row finishes successfully. |
+| `DIP_L1Loss` | float | Final DIP MAE on the test mask, in original units when normalization is enabled. |
+| `DIP_MSELoss` | float | Final DIP MSE on the test mask, in original units when normalization is enabled. |
+| `KRG_L1Loss` | float | Kriging MAE baseline. |
+| `KRG_MSELoss` | float | Kriging MSE baseline. |
+| `IDW_L1Loss` | float | Inverse-distance weighting MAE baseline. |
+| `IDW_MSELoss` | float | Inverse-distance weighting MSE baseline. |
+| `data_mean` | float | Mean observed value over train and validation cells. |
+| `data_median` | float | Median observed value over train and validation cells. |
+| `data_max` | float | Max observed value over train and validation cells. |
+| `data_std` | float | Standard deviation over train and validation cells. |
+| `data_p90_p10` | float | Difference between the 90th and 10th observed percentiles. |
 
 ## `exp_<sensor_group>_<timestamp>.npz`
 
 This file stores the detailed output of a single experiment.
 The filename is generated by `get_experiment_name(sensor_group_key, time_window)`.
 
-### Filename Format
-
 | Part | Example | Meaning |
 | --- | --- | --- |
 | Prefix | `exp_` | Marks the file as a single experiment artifact. |
-| `<sensor_group>` | `28079004-28079016-28079036-28079050` | The same group key stored in `results.csv.sensor_group`. |
+| `<sensor_group>` | `28079004-28079016-28079036-28079050` | Same group key stored in `results.csv.sensor_group`. |
 | `<timestamp>` | `20240102T080000` | Experiment time formatted as `%Y%m%dT%H%M%S`. |
 
 ### Shape Reference
 
-| Symbol | Meaning | Typical value |
-| --- | --- | ---: |
-| `K` | `ensemble_size` | 5 |
-| `E` | `epochs` | 250 |
-| `H` | Grid height | 24 |
-| `W` | Grid width | 23 |
+| Symbol | Meaning |
+| --- | --- |
+| `K` | `ensemble_size` |
+| `C` | number of pollutant channels |
+| `E` | `epochs` |
+| `H` | grid height |
+| `W` | grid width |
 
-### Canonical Arrays (Current Code Path)
+### Canonical Arrays
 
-These fields are written by the current `run_experiments()` implementation when using the current `DipTrainer`.
+These fields are written by the current `DipEnsembleOptimizer` code path.
 
 | Array | Type | Typical shape | Description |
 | --- | --- | --- | --- |
-| `train_data` | `float32` | `(K, 1, 1, H, W)` | Ground-truth values used for training for each ensemble member. |
-| `val_data` | `float32` | `(K, 1, 1, H, W)` | Ground-truth validation values used to rank candidate epochs. |
-| `test_data` | `float32` | `(K, 1, 1, H, W)` | Held-out test values used only for final evaluation. |
-| `train_mask` | `bool` | `(K, 1, 1, H, W)` | Spatial mask of cells used for training. |
-| `val_mask` | `bool` | `(K, 1, 1, H, W)` | Spatial mask of cells used for validation. |
-| `test_mask` | `bool` | `(K, 1, 1, H, W)` | Spatial mask of held-out test cells. |
-| `train_output` | `float32` | `(H, W)` | Final selected prediction surface returned by `trainer.get_best_result()`. Despite the name, this is the final output for the experiment. |
-| `val_min_idx` | integer array | `(K, 10)` | Indices of the best validation epochs chosen for each ensemble member. |
-| `train_k_output` | `float32` | `(K, 1, E, H, W)` | Full prediction trace for all ensemble members across all epochs. |
-| `train_k_loss` | `float32` | `(K, 1, E, 2)` | Training loss trace. Last axis is `[L1Loss, MSELoss]`. |
-| `val_k_loss` | `float32` | `(K, 1, E, 2)` | Validation loss trace. Last axis is `[L1Loss, MSELoss]`. |
-| `test_k_loss` | `float32` | `(K, 1, E, 2)` | Test loss trace. Present in the current code path. |
+| `train_data` | `float32` | `(K, C, 1, H, W)` | Training target values for the final time step. |
+| `val_data` | `float32` | `(K, C, 1, H, W)` | Validation target values for the final time step. |
+| `test_data` | `float32` | `(K, C, 1, H, W)` | Held-out test values. |
+| `train_mask` | `bool` | `(K, C, 1, H, W)` | Training observation mask. |
+| `val_mask` | `bool` | `(K, C, 1, H, W)` | Validation observation mask. |
+| `test_mask` | `bool` | `(K, C, 1, H, W)` | Test observation mask. |
+| `train_output` | `float32` | `(H, W)` or `(C, H, W)` | Final selected prediction surface in model space. |
+| `train_output_real` | `float32` | `(H, W)` or `(C, H, W)` | Final selected prediction surface in real/original space. |
+| `val_min_idx` | integer array | `(K, k_best_n)` | Selected best validation epoch indices for each ensemble member. |
+| `train_k_output` | `float32` | `(K, C, E, H, W)` | Prediction trace for all ensemble members and epochs. |
+| `train_k_loss` | `float32` | `(K, C, E, 2)` | Training loss trace. Last axis is `[L1Loss, MSELoss]`. |
+| `val_k_loss` | `float32` | `(K, C, E, 2)` | Validation loss trace. Last axis is `[L1Loss, MSELoss]`. |
+| `test_k_loss` | `float32` | `(K, C, E, 2)` | Test loss trace recomputed across epoch outputs. |
+| `normalization_stats` | object, optional | mapping | Saved normalization statistics keyed by pollutant id when `normalize = true`. |
 
-### Older / Compact Variants Seen In Sample Folders
+### Older Variants
 
-Some sample folders contain earlier or alternate schemas. These are still useful to support in documentation because they already exist under `output/experiments/experiment_test*`.
+Some existing sample folders were written by older or compact code paths. Utility code should continue to tolerate these variants when reading historical artifacts.
 
 | Variant | Meaning |
 | --- | --- |
 | `val_min_idx = None` | Older files were written before best-epoch indices were stored. |
 | `test_k_loss` missing | Older files only stored training and validation loss traces. |
+| `train_output_real` missing | Older files only stored `train_output`. |
+| `normalization_stats` missing | Older normalized artifacts may need repair before unnormalized plots can be rendered. |
 | `train_data`, `val_data`, `test_data` missing | Some compact files store only masks, final output, and loss traces. |
-| `train_mask`, `val_mask`, `test_mask` shaped as `(H, W)` | Compact files omit the ensemble/channel axes. |
-| `train_output` shaped as `(1, H, W)` | Compact files keep a singleton channel axis in the final output. |
-| `val_min_idx` shaped as `(K, 1)` | Older logic stored only one best epoch per ensemble member. |
+| masks shaped as `(H, W)` | Compact files omit ensemble/channel axes. |
+| `train_output` shaped as `(1, H, W)` | Compact files keep a singleton channel axis. |
 
-## `video.html`
+## Visualizations
 
-This file is optional and is generated by the plotting CLI in `src/metraq_dip/tools/plot.py`, not by `run_experiments()`.
-It uses the first `exp_*.npz` file found in the folder, so it is a visualization of one representative experiment, not a summary of all 2400.
+`src/metraq_dip/utils/plot_surface_video.py` reads the first `exp_*.npz` file in a session folder and writes a standalone Plotly HTML animation.
 
-| Part | Source | Description |
-| --- | --- | --- |
-| 3D animated surface | `train_k_output` | Plotly animation of the predicted concentration surface across epochs, averaged across ensemble members. |
-| Train markers | `train_data` + `train_mask` | Black markers showing training observations. |
-| Validation markers | `val_data` + `val_mask` | Yellow markers showing validation observations. |
-| Test markers | `test_data` + `test_mask` | Blue markers showing held-out test observations. |
-| Title | Folder name + filename tokens | Displays session name, test sensor ids, and experiment time. |
+```powershell
+uv run python src/metraq_dip/utils/plot_surface_video.py plot output/experiments/<session>
+uv run python src/metraq_dip/utils/plot_surface_video.py plot --unnormalize output/experiments/<session>
+```
 
-## How The Files Relate
+The visualization includes the averaged prediction surface across epochs plus train, validation, and test observation markers.
 
-| Question | File to use |
-| --- | --- |
-| What configuration defined the session? | `config.yaml` |
-| Which sensor groups and timestamps were scheduled? | `data.npz` |
-| Which experiments finished and what were the final metrics? | `results.csv` |
-| What are the detailed tensors and loss curves for one experiment? | The matching `exp_<sensor_group>_<timestamp>.npz` |
-| Is there a quick visual example? | `video.html` if present |
+## Generated Result Pages
+
+The old cross-session `experiment_results.md` page has been removed from the docs. If a fresh cross-session summary is needed, regenerate it from the utility script:
+
+```powershell
+uv run python src/metraq_dip/utils/generate_experiment_results_doc.py output/experiments --output-file docs/experiment_results.md
+```
+
+Then add it back to `mkdocs.yml` if it should be published.

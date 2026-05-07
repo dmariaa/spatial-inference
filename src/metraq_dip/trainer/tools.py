@@ -24,9 +24,11 @@ def load_experiment_data(experiment_file: pathlib.Path):
     train_mask = exp_data['train_mask'].astype(bool)
     val_mask = exp_data['val_mask'].astype(bool)
     test_mask = exp_data['test_mask'].astype(bool)
+    val_data = exp_data['val_data'].astype(float) if 'val_data' in exp_data else np.zeros_like(train_data)
 
     stats = compute_results_data_stats(
         train_data=train_data,
+        val_data=val_data,
         train_mask=train_mask,
         val_mask=val_mask,
     )

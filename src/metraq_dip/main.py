@@ -109,12 +109,12 @@ def run_experiments(session_folder: Path) -> None:
 
     train_data = _denormalize_masked(experiment['train_data'], experiment['train_mask'], mean=mean, std=std)
     val_data = _denormalize_masked(experiment['val_data'], experiment['val_mask'], mean=mean, std=std)
-    test_data = _denormalize_masked(experiment['test_data'], experiment['test_mask'], mean=mean, std=std)
-    output = _denormalize_output(experiment['train_output'], mean=mean, std=std)
-    k_output = _denormalize_output(experiment['train_k_output'], mean=mean, std=std)
+    train_mask = np.asarray(experiment['train_mask'], dtype=bool)
+    val_mask = np.asarray(experiment['val_mask'], dtype=bool)
 
-    data = (train_data + val_data)[0]
-    mask = (experiment['train_mask'] + experiment['val_mask'])[0]
+    data = np.where(train_mask, train_data, val_data)[0]
+    mask = (train_mask | val_mask)[0]
+
     click.echo(f"Recovered original-space arrays for {experiment_file.name}")
     click.echo(f"{'mean':>15}: {_format_metric(data[mask].mean())}")
     click.echo(f"{'std':>15}: {_format_metric(data[mask].std())}")

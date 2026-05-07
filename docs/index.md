@@ -4,17 +4,10 @@ This site contains the internal experiment documentation for `spatial-inference`
 
 ## Included Pages
 
-- **Experiments Schema**: structure of session folders and file formats.
-- **Experiment Results**: generated comparison tables across sessions under `output/experiments`.
-- **Notes**: additional working notes.
-
-## Generate Results Page
-
-Regenerate the experiment results markdown before publishing:
-
-```powershell
-.\.venv\Scripts\python.exe src/metraq_dip/tools/generate_experiment_results_doc.py --experiments-root output/experiments --output-file docs/experiment_results.md
-```
+- **Experiments**: entry point for experiment result blocks and artifact schema.
+- **METRAQ NO**: paper-ready NO summary tables, window diagnostics, and exemplary window visualizations.
+- **Cross-Dataset UNet**: UNet NO2/NOX comparisons for AIRPARIF and METRAQ.
+- **Cross-Dataset Autoencoder**: autoencoder NO2/NOX comparisons for AIRPARIF and METRAQ.
 
 ## Build The Docs Site
 

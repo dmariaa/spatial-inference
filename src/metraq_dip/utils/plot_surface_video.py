@@ -256,8 +256,9 @@ def _build_baseline_plot_data(
     test_mask: np.ndarray,
     method: str,
 ) -> dict:
-    observed_data = train_data + val_data
     observed_mask = train_mask | val_mask
+    observed_data = np.where(train_mask, train_data, val_data)
+
     interpolator = _get_interpolator(method)
     current_observed_data = observed_data[0, :, -1:, ...]
     current_observed_mask = observed_mask[0, :, -1:, ...]
@@ -385,7 +386,8 @@ if __name__ == "__main__":
 
         plot_title = _build_plot_title(session_folder.name, experiment_file.name)
 
-        all_data = (train_data + val_data + test_data)[0, 0, 0]
+        observed_data = np.where(train_mask, train_data, val_data)
+        all_data = (observed_data + test_data)[0, 0, 0]
         limits = (np.nanmin(all_data), np.nanmax(all_data))
 
         video = plot_video(data=plot_data, title=plot_title, limits=limits)
@@ -457,7 +459,10 @@ if __name__ == "__main__":
             )
 
         plot_title = _build_plot_title(session_folder.name, experiment_file.name) + f" | {method_name.upper()}"
-        all_data = (train_data + val_data + test_data)[0, 0, 0]
+
+        observed_data = np.where(train_mask, train_data, val_data)
+        all_data = (observed_data + test_data)[0, 0, 0]
+
         limits = (np.nanmin(all_data), np.nanmax(all_data))
 
         video = plot_video(data=plot_data, title=plot_title, limits=limits)

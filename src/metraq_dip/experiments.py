@@ -350,6 +350,7 @@ def _run_single_experiment(
     )
     data_stats = compute_results_data_stats(
         train_data=experiment_data["train_data"],
+        val_data=experiment_data["val_data"],
         train_mask=experiment_data["train_mask"],
         val_mask=experiment_data["val_mask"],
     )
@@ -363,12 +364,15 @@ def _run_single_experiment(
     val_mask_first = np.asarray(experiment_data["val_mask"][0], dtype=bool)
     test_mask_first = np.asarray(experiment_data["test_mask"][0], dtype=bool)
 
+    observed_mask = train_mask_first | val_mask_first
+    observed_data = np.where(train_mask_first, train_data_first, val_data_first)
+
     if bool(config.get("normalize")):
         if normalization_stats is None:
             raise ValueError("normalization_stats are required when normalize=True.")
         x_data = _denormalize_masked_channels(
-            train_data_first + val_data_first,
-            train_mask_first | val_mask_first,
+            observed_data,
+            observed_mask,
             pollutants=pollutants,
             normalization_stats=normalization_stats,
         )
@@ -379,7 +383,7 @@ def _run_single_experiment(
             normalization_stats=normalization_stats,
         )
     else:
-        x_data = train_data_first + val_data_first
+        x_data = observed_data
         y_data = test_data_first
 
     test_target = y_data[:, -1, ...]
@@ -388,7 +392,7 @@ def _run_single_experiment(
 
     interpolation_results = get_interpolation_loss(
         x_data,
-        train_mask_first | val_mask_first,
+        observed_mask,
         y_data,
         test_mask_first,
         pollutants,
