@@ -10,6 +10,35 @@ This page is the entry point for the documented experiment result blocks.
 | [Cross-Dataset UNet](cross_dataset_no2_nox_unet/index.md) | AIRPARIF and METRAQ NO2/NOX experiments using the UNet model. | [Performance + Wilcoxon](cross_dataset_no2_nox_unet/summary_paper_performance.md), [Window diagnostics](cross_dataset_no2_nox_unet/window_diagnostics/summary.md) |
 | [Cross-Dataset Autoencoder](cross_dataset_no2_nox_autoencoder/index.md) | AIRPARIF and METRAQ NO2/NOX experiments using the autoencoder model. | [Performance + Wilcoxon](cross_dataset_no2_nox_autoencoder/summary_paper_performance.md), [Window diagnostics](cross_dataset_no2_nox_autoencoder/window_diagnostics/summary.md) |
 
+## Experiment Inventory
+
+This list covers the configured experiment folders under `output/experiments`, excluding `experiment_test_airparif` because it is a test run. `pollutant_diagnostics` is a derived diagnostics bundle, not a configured experiment.
+
+Common settings unless noted: normalized inputs, ensemble size 5, best 3 models retained, 250 epochs, learning rate 0.01, MAE optimization loss, 10 spread test groups of 4 sensors, max 2 uses per sensor, 20 windows per month in 2024, start hours 06:00-20:00, and weekend fraction 0.4.
+
+| Block | Experiment | Dataset | Pollutant | Model | Hours | Extra channels |
+| --- | --- | --- | --- | --- | ---: | --- |
+| METRAQ NO | baseline | METRAQ | NO | autoencoder | 1 | none |
+| METRAQ NO | add24h | METRAQ | NO | autoencoder | 24 | none |
+| METRAQ NO | trafficdata | METRAQ | NO | autoencoder | 24 | distance-to-sensors, traffic |
+| METRAQ NO | addons | METRAQ | NO | autoencoder | 24 | distance-to-sensors |
+| Cross-Dataset UNet | airparif_no2_baseline | AIRPARIF | NO2 | unet | 24 | none |
+| Cross-Dataset UNet | airparif_no2_spatial | AIRPARIF | NO2 | unet | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset UNet | airparif_nox_baseline | AIRPARIF | NOX | unet | 24 | none |
+| Cross-Dataset UNet | airparif_nox_spatial | AIRPARIF | NOX | unet | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset UNet | metraq_no2_baseline | METRAQ | NO2 | unet | 24 | none |
+| Cross-Dataset UNet | metraq_no2_spatial | METRAQ | NO2 | unet | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset UNet | metraq_nox_baseline | METRAQ | NOX | unet | 24 | none |
+| Cross-Dataset UNet | metraq_nox_spatial | METRAQ | NOX | unet | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset Autoencoder | airparif_no2_baseline | AIRPARIF | NO2 | autoencoder | 24 | none |
+| Cross-Dataset Autoencoder | airparif_no2_spatial | AIRPARIF | NO2 | autoencoder | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset Autoencoder | airparif_nox_baseline | AIRPARIF | NOX | autoencoder | 24 | none |
+| Cross-Dataset Autoencoder | airparif_nox_spatial | AIRPARIF | NOX | autoencoder | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset Autoencoder | metraq_no2_baseline | METRAQ | NO2 | autoencoder | 24 | none |
+| Cross-Dataset Autoencoder | metraq_no2_spatial | METRAQ | NO2 | autoencoder | 24 | coordinates, distance-to-sensors |
+| Cross-Dataset Autoencoder | metraq_nox_baseline | METRAQ | NOX | autoencoder | 24 | none |
+| Cross-Dataset Autoencoder | metraq_nox_spatial | METRAQ | NOX | autoencoder | 24 | coordinates, distance-to-sensors |
+
 ## Reference
 
 - [Artifacts Schema](experiments.md): session folder structure, `results.csv` columns, `.npz` artifact fields, and visualization commands.

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from metraq_dip.utils.cross_dataset_no2_nox_summary import (
+from metraq_dip.utils.experiment_summary_tables import (
     ExperimentSpec,
     build_paper_performance_data,
     render_paper_performance_table,
