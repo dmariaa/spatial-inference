@@ -20,7 +20,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from metraq_dip.data.aq_backends import get_aq_backend_for_config
-from metraq_dip.data.data import collect_data
+from metraq_dip.data.data import collect_data, collect_ensemble_data
 from metraq_dip.tools.config_tools import SessionConfig, load_session_config
 from metraq_dip.tools.random_tools import (
     get_all_time_windows,
@@ -37,6 +37,7 @@ from metraq_dip.tools.results_stats import (
 )
 from metraq_dip.tools.tools import get_interpolation_loss, is_truthy
 from metraq_dip.trainer.dip_ensemble_optimizer import DipEnsembleOptimizer, reduce_surface_ensemble
+from metraq_dip.trainer.dip_optimizer import DipOptimizer
 
 
 def _get_time_windows(session_config: SessionConfig) -> list[pd.Timestamp]:
@@ -337,11 +338,26 @@ def _run_single_experiment(
         aq_backend=aq_backend,
     )
 
-    optimizer = DipEnsembleOptimizer(
-        configuration=config,
-        static_data=static_data,
-        disable_tqdm=disable_nested_tqdm,
-    )
+    if bool(config.get("use_ensemble", True)):
+        optimizer = DipEnsembleOptimizer(
+            configuration=config,
+            static_data=static_data,
+            disable_tqdm=disable_nested_tqdm,
+        )
+    else:
+        split_data = collect_ensemble_data(
+            data=static_data,
+            number_of_noise_channels=int(config.get("number_of_noise_channels") or 8),
+            number_of_val_sensors=config["validation_sensors"],
+            add_distance_to_sensors=bool(config.get("add_distance_to_sensors")),
+            normalize=bool(config.get("normalize")),
+            aq_backend=aq_backend,
+        )
+        optimizer = DipOptimizer(
+            configuration=config,
+            split_data=split_data,
+            disable_tqdm=disable_nested_tqdm,
+        )
     surface_real = np.asarray(optimizer.optimize(), dtype=np.float32)
     optimizer_artifacts = optimizer.get_artifacts()
     experiment_data = _build_experiment_artifacts(

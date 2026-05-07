@@ -87,6 +87,92 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
     np.testing.assert_allclose(captured["kwargs"]["train_output_real"], np.array([[12.5]], dtype=np.float32))
 
 
+def test_run_single_experiment_can_skip_ensemble_optimizer(monkeypatch, tmp_path):
+    static_data = {
+        "pollutants": [7],
+        "test_data": np.full((1, 1, 1, 1), 1.25, dtype=np.float32),
+        "test_mask": np.array([[[[True]]]], dtype=bool),
+    }
+    split_data = {
+        "train_data": np.full((1, 1, 1, 1), 1.0, dtype=np.float32),
+        "val_data": np.full((1, 1, 1, 1), 1.25, dtype=np.float32),
+        "train_mask": np.ones((1, 1, 1, 1), dtype=bool),
+        "val_mask": np.ones((1, 1, 1, 1), dtype=bool),
+    }
+
+    class DummyDipOptimizer:
+        def __init__(self, *, configuration, split_data, disable_tqdm=False, **kwargs):
+            self.split_data = split_data
+            self.surface = np.array([[[1.25]]], dtype=np.float32)
+
+        def optimize(self) -> np.ndarray:
+            return np.array(self.surface, copy=True)
+
+        def get_artifacts(self) -> dict[str, object]:
+            member_artifacts = {
+                **self.split_data,
+                "surface": np.array(self.surface, copy=True),
+                "surface_model_space": np.array([[[1.25]]], dtype=np.float32),
+                "output_history": np.array([[[[1.25]]]], dtype=np.float32),
+                "train_l1_history": np.array([0.1], dtype=np.float32),
+                "train_mse_history": np.array([0.01], dtype=np.float32),
+                "val_l1_history": np.array([0.2], dtype=np.float32),
+                "val_mse_history": np.array([0.02], dtype=np.float32),
+                "selected_epoch_indices": np.array([0], dtype=np.int64),
+            }
+            return {
+                "surface": np.array(self.surface, copy=True),
+                "member_surfaces": self.surface[None, ...],
+                "member_artifacts": [member_artifacts],
+                "surface_reducer": "mean",
+                "ensemble_size": 1,
+            }
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(experiments, "collect_data", lambda **kwargs: static_data)
+    monkeypatch.setattr(experiments, "collect_ensemble_data", lambda **kwargs: split_data)
+    monkeypatch.setattr(experiments, "DipOptimizer", DummyDipOptimizer)
+    monkeypatch.setattr(
+        experiments,
+        "DipEnsembleOptimizer",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("ensemble optimizer should not run")),
+    )
+    monkeypatch.setattr(experiments, "get_aq_backend_for_config", lambda config: object())
+    monkeypatch.setattr(
+        experiments,
+        "get_interpolation_loss",
+        lambda *args, **kwargs: [{"loss": 0.1}, {"loss": 0.2}, {"loss": 0.3}, {"loss": 0.4}],
+    )
+
+    def fake_savez_compressed(file, **kwargs):
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(experiments.np, "savez_compressed", fake_savez_compressed)
+
+    row_result = experiments._run_single_experiment(
+        config_base={
+            "aq_dataset": "metraq",
+            "aq_backend": "files",
+            "pollutants": [7],
+            "hours": 1,
+            "normalize": False,
+            "validation_sensors": 1,
+            "use_ensemble": False,
+        },
+        experiment_output_folder=str(tmp_path),
+        test_sensor_group=[10],
+        sensor_group_key="group-a",
+        time_window_iso="2024-01-01T00:00:00",
+        disable_nested_tqdm=True,
+    )
+
+    assert abs(row_result["DIP_L1Loss"]) < 1e-5
+    assert abs(row_result["DIP_MSELoss"]) < 1e-5
+    assert captured["kwargs"]["train_data"].shape == (1, 1, 1, 1, 1)
+    assert captured["kwargs"]["train_k_output"].shape == (1, 1, 1, 1, 1)
+    np.testing.assert_allclose(captured["kwargs"]["train_output_real"], np.array([[1.25]], dtype=np.float32))
+
+
 def test_run_experiments_writes_failure_log(monkeypatch, tmp_path, capsys):
     time_window = pd.Timestamp("2024-01-01T00:00:00")
     df = pd.DataFrame(

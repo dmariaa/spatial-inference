@@ -89,7 +89,7 @@ class DipEnsembleOptimizer(SurfaceOptimizer):
                 surface = np.asarray(optimizer.optimize(), dtype=np.float32)
 
                 self.member_surfaces.append(surface)
-                self.member_artifacts.append(optimizer.get_artifacts())
+                self.member_artifacts.append(optimizer._get_member_artifacts())
                 pbar.update(1)
 
         self.selected_surface = reduce_surface_ensemble(

@@ -82,6 +82,9 @@ def test_dip_ensemble_optimizer_returns_reduced_surface_and_artifacts(monkeypatc
         def get_artifacts(self) -> dict[str, object]:
             return dict(self.artifacts)
 
+        def _get_member_artifacts(self) -> dict[str, object]:
+            return dict(self.artifacts)
+
     monkeypatch.setattr(
         "metraq_dip.trainer.dip_ensemble_optimizer.collect_ensemble_data",
         fake_collect_ensemble_data,

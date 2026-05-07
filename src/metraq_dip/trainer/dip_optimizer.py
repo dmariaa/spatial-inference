@@ -54,9 +54,13 @@ class DipOptimizer(SurfaceOptimizer):
 
         self.k_best_n = self.config.get("k_best_n") or 10
         self.optimization_loss = str(self.config.get("optimization_loss", "mae")).lower()
+        self.surface_selection = str(self.config.get("surface_selection", "validation")).lower()
         self.device = torch.device(device) if device is not None else torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
+
+        if self.surface_selection not in {"validation", "last"}:
+            raise ValueError("surface_selection must be one of: validation, last")
 
         self.optimization_loss_map = {
             "mae": "L1Loss",
@@ -277,6 +281,15 @@ class DipOptimizer(SurfaceOptimizer):
             "val_mae": val_losses["L1Loss"].item(),
         }
 
+    def _get_selection_loss_history(self) -> torch.Tensor:
+        if self.optimization_loss == "mae":
+            return self.artifacts["val_l1_history"]
+        if self.optimization_loss == "mse":
+            return self.artifacts["val_mse_history"]
+        if self.optimization_loss == "rmse":
+            return torch.sqrt(self.artifacts["val_mse_history"])
+        raise RuntimeError(f"Unexpected optimization loss: {self.optimization_loss}")
+
     def optimize(self) -> np.ndarray:
         self._prepare_split_tensors()
         self._initialize_artifacts()
@@ -291,11 +304,15 @@ class DipOptimizer(SurfaceOptimizer):
                 pbar.update(1)
                 pbar.set_postfix(**log)
 
-        self.selected_surface_model_space, self.selected_epoch_indices = select_surface_from_validation(
-            output_history=self.artifacts["output_history"],
-            val_loss_history=self.artifacts["val_l1_history"],
-            k_best_n=self.k_best_n,
-        )
+        if self.surface_selection == "last":
+            self.selected_surface_model_space = self.artifacts["output_history"][-1]
+            self.selected_epoch_indices = torch.tensor([epochs - 1], dtype=torch.long)
+        else:
+            self.selected_surface_model_space, self.selected_epoch_indices = select_surface_from_validation(
+                output_history=self.artifacts["output_history"],
+                val_loss_history=self._get_selection_loss_history(),
+                k_best_n=self.k_best_n,
+            )
         self.selected_surface = self._restore_surface_to_real_values(self.selected_surface_model_space)
         return self.selected_surface.detach().cpu().numpy()
 
@@ -304,7 +321,7 @@ class DipOptimizer(SurfaceOptimizer):
             raise RuntimeError("optimize() must be called before selected epoch indices are available.")
         return self.selected_epoch_indices.detach().cpu().numpy()
 
-    def get_artifacts(self) -> dict[str, Any]:
+    def _get_member_artifacts(self) -> dict[str, Any]:
         if self.artifacts is None:
             raise RuntimeError("optimize() must be called before artifacts are available.")
 
@@ -321,4 +338,20 @@ class DipOptimizer(SurfaceOptimizer):
         normalization_stats = self.split_data.get("normalization_stats")
         if normalization_stats is not None:
             artifacts["normalization_stats"] = normalization_stats
+        return artifacts
+
+    def get_artifacts(self) -> dict[str, Any]:
+        member_artifacts = self._get_member_artifacts()
+        artifacts = {
+            "surface": np.array(member_artifacts["surface"], copy=True),
+            "member_surfaces": np.asarray(member_artifacts["surface"], dtype=np.float32)[None, ...],
+            "member_artifacts": [member_artifacts],
+            "surface_reducer": "mean",
+            "ensemble_size": 1,
+        }
+
+        normalization_stats = member_artifacts.get("normalization_stats")
+        if normalization_stats is not None:
+            artifacts["normalization_stats"] = normalization_stats
+
         return artifacts

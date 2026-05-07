@@ -96,12 +96,17 @@ def test_dip_optimizer_returns_surface_and_artifacts():
     assert surface.shape == (1, 4, 4)
     assert artifacts["surface"].shape == (1, 4, 4)
     assert np.allclose(surface, artifacts["surface"])
-    assert artifacts["surface_model_space"].shape == (1, 4, 4)
-    assert artifacts["output_history"].shape == (2, 1, 4, 4)
-    assert artifacts["train_l1_history"].shape == (2,)
-    assert artifacts["val_l1_history"].shape == (2,)
-    assert artifacts["selected_epoch_indices"].shape == (1,)
+    assert artifacts["member_surfaces"].shape == (1, 1, 4, 4)
+    assert artifacts["surface_reducer"] == "mean"
+    assert artifacts["ensemble_size"] == 1
     assert artifacts["normalization_stats"] == {7: (12.5, 3.5)}
+    member_artifacts = artifacts["member_artifacts"][0]
+    assert member_artifacts["surface_model_space"].shape == (1, 4, 4)
+    assert member_artifacts["output_history"].shape == (2, 1, 4, 4)
+    assert member_artifacts["train_l1_history"].shape == (2,)
+    assert member_artifacts["val_l1_history"].shape == (2,)
+    assert member_artifacts["selected_epoch_indices"].shape == (1,)
+    assert member_artifacts["normalization_stats"] == {7: (12.5, 3.5)}
 
 
 def test_dip_optimizer_returns_surface_in_real_values_when_normalized(monkeypatch):
@@ -150,7 +155,102 @@ def test_dip_optimizer_returns_surface_in_real_values_when_normalized(monkeypatc
 
     assert np.allclose(surface, np.full((1, 2, 2), 10.0, dtype=np.float32))
     assert np.allclose(artifacts["surface"], np.full((1, 2, 2), 10.0, dtype=np.float32))
-    assert np.allclose(artifacts["surface_model_space"], np.zeros((1, 2, 2), dtype=np.float32))
+    member_artifacts = artifacts["member_artifacts"][0]
+    assert np.allclose(member_artifacts["surface_model_space"], np.zeros((1, 2, 2), dtype=np.float32))
+
+
+def test_dip_optimizer_selects_surface_with_configured_validation_loss(monkeypatch):
+    optimizer = DipOptimizer(
+        configuration={
+            "epochs": 2,
+            "lr": 1e-3,
+            "k_best_n": 1,
+            "optimization_loss": "mse",
+            "normalize": False,
+            "pollutants": [7],
+            "model": {
+                "base_channels": 1,
+                "levels": 1,
+                "preserve_time": True,
+                "learned_upsampling": False,
+            },
+        },
+        split_data={
+            "input_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+            "train_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+            "val_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+            "train_mask": np.ones((1, 1, 1, 1), dtype=bool),
+            "val_mask": np.ones((1, 1, 1, 1), dtype=bool),
+            "pollutants": [7],
+        },
+        disable_tqdm=True,
+        device="cpu",
+    )
+
+    monkeypatch.setattr(optimizer, "_get_model", lambda: object())
+    monkeypatch.setattr(optimizer, "_get_optimizer", lambda: object())
+
+    def fake_run_epoch(*, step: int):
+        optimizer.artifacts["output_history"][step] = torch.full((1, 1, 1), float(step), dtype=torch.float32)
+        optimizer.artifacts["train_l1_history"][step] = 0.0
+        optimizer.artifacts["train_mse_history"][step] = 0.0
+        optimizer.artifacts["val_l1_history"][step] = [0.1, 0.0][step]
+        optimizer.artifacts["val_mse_history"][step] = [0.0, 0.1][step]
+        return {"train_mae": 0.0, "val_mae": 0.0}
+
+    monkeypatch.setattr(optimizer, "_run_epoch", fake_run_epoch)
+
+    surface = optimizer.optimize()
+
+    np.testing.assert_allclose(surface, np.array([[[0.0]]], dtype=np.float32))
+    np.testing.assert_array_equal(optimizer.get_selected_epoch_indices(), np.array([0]))
+
+
+def test_dip_optimizer_can_select_last_surface(monkeypatch):
+    optimizer = DipOptimizer(
+        configuration={
+            "epochs": 3,
+            "lr": 1e-3,
+            "k_best_n": 1,
+            "surface_selection": "last",
+            "normalize": False,
+            "pollutants": [7],
+            "model": {
+                "base_channels": 1,
+                "levels": 1,
+                "preserve_time": True,
+                "learned_upsampling": False,
+            },
+        },
+        split_data={
+            "input_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+            "train_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+            "val_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+            "train_mask": np.ones((1, 1, 1, 1), dtype=bool),
+            "val_mask": np.ones((1, 1, 1, 1), dtype=bool),
+            "pollutants": [7],
+        },
+        disable_tqdm=True,
+        device="cpu",
+    )
+
+    monkeypatch.setattr(optimizer, "_get_model", lambda: object())
+    monkeypatch.setattr(optimizer, "_get_optimizer", lambda: object())
+
+    def fake_run_epoch(*, step: int):
+        optimizer.artifacts["output_history"][step] = torch.full((1, 1, 1), float(step), dtype=torch.float32)
+        optimizer.artifacts["train_l1_history"][step] = 0.0
+        optimizer.artifacts["train_mse_history"][step] = 0.0
+        optimizer.artifacts["val_l1_history"][step] = 0.0
+        optimizer.artifacts["val_mse_history"][step] = 0.0
+        return {"train_mae": 0.0, "val_mae": 0.0}
+
+    monkeypatch.setattr(optimizer, "_run_epoch", fake_run_epoch)
+
+    surface = optimizer.optimize()
+
+    np.testing.assert_allclose(surface, np.array([[[2.0]]], dtype=np.float32))
+    np.testing.assert_array_equal(optimizer.get_selected_epoch_indices(), np.array([2]))
 
 
 def test_dip_optimizer_expands_broadcastable_masks(monkeypatch):
@@ -195,6 +295,7 @@ def test_dip_optimizer_expands_broadcastable_masks(monkeypatch):
 
     optimizer.optimize()
     artifacts = optimizer.get_artifacts()
+    member_artifacts = artifacts["member_artifacts"][0]
 
-    assert artifacts["train_mask"].shape == (1, 24, 2, 2)
-    assert artifacts["val_mask"].shape == (1, 24, 2, 2)
+    assert member_artifacts["train_mask"].shape == (1, 24, 2, 2)
+    assert member_artifacts["val_mask"].shape == (1, 24, 2, 2)

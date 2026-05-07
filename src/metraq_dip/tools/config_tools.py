@@ -91,6 +91,7 @@ class TrainerConfig(BaseModel):
     ensemble_size: int = Field(gt=0)
     lr: float = Field(gt=0)
     optimization_loss: Literal["mae", "mse", "rmse"] = "mae"
+    surface_selection: Literal["validation", "last"] = "validation"
 
     normalize: bool = False
     add_meteo: bool = False
@@ -98,6 +99,7 @@ class TrainerConfig(BaseModel):
     add_coordinates: bool = False
     add_distance_to_sensors: bool = False
     add_traffic_data: bool = False
+    use_ensemble: bool = True
     k_best_n: int | None = Field(default=None, gt=0)
 
     model: ModelConfig
