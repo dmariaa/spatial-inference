@@ -8,6 +8,7 @@ This site contains the internal experiment documentation for `spatial-inference`
 - **METRAQ NO**: paper-ready NO summary tables, window diagnostics, and exemplary window visualizations.
 - **Cross-Dataset UNet**: UNet NO2/NOX comparisons for AIRPARIF and METRAQ.
 - **Cross-Dataset Autoencoder**: autoencoder NO2/NOX comparisons for AIRPARIF and METRAQ.
+- **Surface Selection 2023**: interim comparison of ensemble and surface-selection strategies for METRAQ NOX 2023.
 
 ## Build The Docs Site
 

@@ -25,3 +25,7 @@ nav:
           - Overview: cross_dataset_no2_nox_autoencoder/index.md
           - Performance Summary: cross_dataset_no2_nox_autoencoder/summary_paper_performance.md
           - Window Diagnostics: cross_dataset_no2_nox_autoencoder/window_diagnostics/summary.md
+      - Surface Selection 2023:
+          - Overview: surface_selection_2023/index.md
+          - Performance Summary: surface_selection_2023/summary_paper_performance.md
+          - Narrative Summary: surface_selection_2023/interim_summary.md
