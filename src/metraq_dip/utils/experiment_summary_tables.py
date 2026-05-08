@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import wilcoxon
+from scipy.stats import friedmanchisquare, wilcoxon
 import yaml
 
 from metraq_dip.experiments import _denormalize_masked_channels
@@ -93,6 +93,18 @@ def _fmt_pvalue_paper(value: float) -> str:
     if value < 0.001:
         return "p<.001"
     return f"p={value:.3f}".replace("p=0.", "p=.")
+
+
+def _holm_adjust(pvalues: list[float]) -> list[float]:
+    m = len(pvalues)
+    order = sorted(range(m), key=lambda i: pvalues[i])
+    adjusted = [0.0] * m
+    running = 0.0
+    for rank, idx in enumerate(order):
+        value = (m - rank) * pvalues[idx]
+        running = max(running, value)
+        adjusted[idx] = min(1.0, running)
+    return adjusted
 
 
 def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -324,6 +336,23 @@ def _metric_frame(
     return pd.DataFrame({method: source[column].astype(float) for method, column in zip(METHODS, columns)})
 
 
+def _friedman_pvalue(metric_values: pd.DataFrame) -> float:
+    _, pvalue = friedmanchisquare(
+        metric_values["DIP"].astype(float),
+        metric_values["KRG"].astype(float),
+        metric_values["IDW"].astype(float),
+    )
+    return float(pvalue)
+
+
+def _mean_ranks(metric_values: pd.DataFrame) -> dict[str, float]:
+    ranks = metric_values.astype(float).rank(axis=1, method="average", ascending=True)
+    return {
+        method: float(ranks[method].mean())
+        for method in METHODS
+    }
+
+
 def _format_metric_means(values: pd.Series, *, digits: int = 3) -> dict[str, str]:
     best = float(values.min())
     formatted: dict[str, str] = {}
@@ -356,6 +385,18 @@ def _format_win_rates(rates: dict[str, float]) -> dict[str, str]:
     }
 
 
+def _format_mean_ranks(ranks: dict[str, float], *, digits: int = 3) -> dict[str, str]:
+    best = min(ranks.values())
+    return {
+        method: (
+            f"**{_fmt_float(ranks[method], digits=digits)}**"
+            if np.isclose(ranks[method], best)
+            else _fmt_float(ranks[method], digits=digits)
+        )
+        for method in METHODS
+    }
+
+
 def _directional_wilcoxon_result(metric_values: pd.DataFrame, left: str, right: str) -> tuple[str, float]:
     left_values = metric_values[left].astype(float)
     right_values = metric_values[right].astype(float)
@@ -364,17 +405,40 @@ def _directional_wilcoxon_result(metric_values: pd.DataFrame, left: str, right: 
     if np.isclose(left_mean, right_mean):
         direction = "tie"
     else:
-        lower = left if left_mean < right_mean else right
-        direction = f"{lower} lower"
+        direction = left if left_mean < right_mean else right
 
     pvalue = float(wilcoxon(left_values - right_values).pvalue)
     return direction, pvalue
 
 
-def _format_directional_wilcoxon(direction: str, pvalue: float) -> str:
-    if pvalue >= 0.05:
-        return f"{direction}, n.s. ({_fmt_pvalue_paper(pvalue)})"
-    return f"{direction} ({_fmt_pvalue_paper(pvalue)})"
+def _pairwise_posthoc(metric_values: pd.DataFrame) -> dict[str, dict[str, object]]:
+    pairs = [("DIP", "KRG"), ("DIP", "IDW"), ("KRG", "IDW")]
+    labels: list[str] = []
+    directions: list[str] = []
+    raw_pvalues: list[float] = []
+
+    for left, right in pairs:
+        direction, raw_pvalue = _directional_wilcoxon_result(metric_values, left, right)
+        labels.append(f"{left} vs {right}")
+        directions.append(direction)
+        raw_pvalues.append(raw_pvalue)
+
+    holm_pvalues = _holm_adjust(raw_pvalues)
+    return {
+        label: {
+            "direction": direction,
+            "raw_pvalue": raw_pvalue,
+            "holm_pvalue": holm_pvalue,
+        }
+        for label, direction, raw_pvalue, holm_pvalue in zip(labels, directions, raw_pvalues, holm_pvalues)
+    }
+
+
+def _format_directional_posthoc(direction: str, holm_pvalue: float) -> str:
+    _ = direction
+    if holm_pvalue >= 0.05:
+        return "n.s."
+    return _fmt_pvalue_paper(holm_pvalue)
 
 
 def build_paper_performance_data(
@@ -389,11 +453,11 @@ def build_paper_performance_data(
         wdf = wape_frames[spec.key]
         for metric in ("MAE", "MSE", "WAPE"):
             metric_values = _metric_frame(metric=metric, df=df, wdf=wdf)
+            friedman_pvalue = _friedman_pvalue(metric_values)
+            mean_ranks = _mean_ranks(metric_values)
+            posthoc = _pairwise_posthoc(metric_values)
             means = metric_values.mean()
             win_rates = _winner_rate_values(metric_values)
-            dip_krg_direction, dip_krg_pvalue = _directional_wilcoxon_result(metric_values, "DIP", "KRG")
-            dip_idw_direction, dip_idw_pvalue = _directional_wilcoxon_result(metric_values, "DIP", "IDW")
-            krg_idw_direction, krg_idw_pvalue = _directional_wilcoxon_result(metric_values, "KRG", "IDW")
 
             rows.append(
                 {
@@ -407,12 +471,19 @@ def build_paper_performance_data(
                     "DIP win pct": float(win_rates["DIP"]),
                     "KRG win pct": float(win_rates["KRG"]),
                     "IDW win pct": float(win_rates["IDW"]),
-                    "DIP vs KRG direction": dip_krg_direction,
-                    "DIP vs KRG pvalue": dip_krg_pvalue,
-                    "DIP vs IDW direction": dip_idw_direction,
-                    "DIP vs IDW pvalue": dip_idw_pvalue,
-                    "KRG vs IDW direction": krg_idw_direction,
-                    "KRG vs IDW pvalue": krg_idw_pvalue,
+                    "DIP mean rank": float(mean_ranks["DIP"]),
+                    "KRG mean rank": float(mean_ranks["KRG"]),
+                    "IDW mean rank": float(mean_ranks["IDW"]),
+                    "Friedman pvalue": friedman_pvalue,
+                    "DIP vs KRG direction": str(posthoc["DIP vs KRG"]["direction"]),
+                    "DIP vs KRG pvalue": float(posthoc["DIP vs KRG"]["raw_pvalue"]),
+                    "DIP vs KRG holm pvalue": float(posthoc["DIP vs KRG"]["holm_pvalue"]),
+                    "DIP vs IDW direction": str(posthoc["DIP vs IDW"]["direction"]),
+                    "DIP vs IDW pvalue": float(posthoc["DIP vs IDW"]["raw_pvalue"]),
+                    "DIP vs IDW holm pvalue": float(posthoc["DIP vs IDW"]["holm_pvalue"]),
+                    "KRG vs IDW direction": str(posthoc["KRG vs IDW"]["direction"]),
+                    "KRG vs IDW pvalue": float(posthoc["KRG vs IDW"]["raw_pvalue"]),
+                    "KRG vs IDW holm pvalue": float(posthoc["KRG vs IDW"]["holm_pvalue"]),
                 }
             )
 
@@ -428,9 +499,13 @@ def render_paper_performance_table(summary: pd.DataFrame) -> str:
         "DIP",
         "KRG",
         "IDW",
-        "DIP win %",
-        "KRG win %",
-        "IDW win %",
+        "DIP <br> win %",
+        "KRG <br> win %",
+        "IDW <br> win %",
+        "DIP <br> rank",
+        "KRG <br> rank",
+        "IDW <br> rank",
+        "Friedman p",
         "DIP vs KRG",
         "DIP vs IDW",
         "KRG vs IDW",
@@ -454,6 +529,13 @@ def render_paper_performance_table(summary: pd.DataFrame) -> str:
                 "IDW": float(row["IDW win pct"]),
             }
         )
+        mean_ranks = _format_mean_ranks(
+            {
+                "DIP": float(row["DIP mean rank"]),
+                "KRG": float(row["KRG mean rank"]),
+                "IDW": float(row["IDW mean rank"]),
+            }
+        )
         rows.append(
             [
                 str(row["Dataset"]),
@@ -466,17 +548,21 @@ def render_paper_performance_table(summary: pd.DataFrame) -> str:
                 win_rates["DIP"],
                 win_rates["KRG"],
                 win_rates["IDW"],
-                _format_directional_wilcoxon(
+                mean_ranks["DIP"],
+                mean_ranks["KRG"],
+                mean_ranks["IDW"],
+                _fmt_pvalue_paper(float(row["Friedman pvalue"])),
+                _format_directional_posthoc(
                     str(row["DIP vs KRG direction"]),
-                    float(row["DIP vs KRG pvalue"]),
+                    float(row["DIP vs KRG holm pvalue"]),
                 ),
-                _format_directional_wilcoxon(
+                _format_directional_posthoc(
                     str(row["DIP vs IDW direction"]),
-                    float(row["DIP vs IDW pvalue"]),
+                    float(row["DIP vs IDW holm pvalue"]),
                 ),
-                _format_directional_wilcoxon(
+                _format_directional_posthoc(
                     str(row["KRG vs IDW direction"]),
-                    float(row["KRG vs IDW pvalue"]),
+                    float(row["KRG vs IDW holm pvalue"]),
                 ),
             ]
         )
@@ -485,22 +571,13 @@ def render_paper_performance_table(summary: pd.DataFrame) -> str:
         "\n\n"
         "Note: lower is better. Bold marks the lowest mean error in each row. "
         "Win % is the fraction of windows where the method has the lowest error among DIP, KRG, and IDW; "
-        "ties count for each tied method.\n\n"
-        "Wilcoxon entries name the method with the lower mean error for that pair. "
-        "P-values are from paired two-sided Wilcoxon signed-rank tests over windows; "
-        "n.s. denotes p >= .05."
+        "ties count for each tied method. Mean ranks are Friedman within-window ranks averaged across windows; "
+        "lower ranks indicate better overall ordering.\n\n"
+        "Friedman p-values are from the omnibus repeated-measures test across DIP, KRG, and IDW.\n\n"
+        "Pairwise entries report post-hoc p-values from paired two-sided Wilcoxon signed-rank tests over windows "
+        "with Holm adjustment; n.s. denotes p >= .05."
     )
-    return _markdown_table(headers, rows) + note
-
-
-def build_paper_performance_table(
-    specs: list[ExperimentSpec],
-    frames: dict[str, pd.DataFrame],
-    wape_frames: dict[str, pd.DataFrame],
-) -> str:
-    return render_paper_performance_table(
-        build_paper_performance_data(specs, frames, wape_frames)
-    )
+    return "## Experiment Summary\n\n" + _markdown_table(headers, rows) + note
 
 
 def build_compact_comparison_table(

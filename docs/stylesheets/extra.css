@@ -35,3 +35,23 @@
 [role="main"] table td {
   padding: 0.45rem 0.6rem;
 }
+
+/* Only the generated experiment summary tables get block separators. */
+h2#experiment-summary + table th:nth-child(4),
+h2#experiment-summary + table td:nth-child(4),
+h2#experiment-summary + table th:nth-child(7),
+h2#experiment-summary + table td:nth-child(7),
+h2#experiment-summary + table th:nth-child(10),
+h2#experiment-summary + table td:nth-child(10),
+h2#experiment-summary + table th:nth-child(13),
+h2#experiment-summary + table td:nth-child(13),
+h2#experiment-summary + table th:nth-child(14),
+h2#experiment-summary + table td:nth-child(14) {
+  border-right: 1px solid #999;
+}
+
+h2#experiment-summary + table thead tr:nth-child(1),
+h2#experiment-summary + table tbody tr:nth-child(3n)
+{
+  border-bottom: 2px solid #999;
+}

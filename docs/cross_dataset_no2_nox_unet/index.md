@@ -6,7 +6,7 @@ The experiment set compares AIRPARIF and METRAQ sessions for NO2 and NOX, with b
 
 ## Summary Tables
 
-- [Performance Summary](summary_paper_performance.md): aggregate metrics, win rates, and pairwise Wilcoxon outcomes for DIP, KRG, and IDW.
+- [Performance Summary](summary_paper_performance.md): aggregate means, win rates, Friedman mean ranks, Friedman omnibus tests, and pairwise Wilcoxon post-hoc comparisons with Holm adjustment for DIP, KRG, and IDW.
 ## Window Diagnostics
 
 - [Window Diagnostics](window_diagnostics/summary.md): aggregate diagnostics plus direct links to exemplary best and worst windows.

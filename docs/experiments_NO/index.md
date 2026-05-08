@@ -4,7 +4,7 @@ This section collects the generated documentation artifacts for the METRAQ NO ex
 
 ## Summary Tables
 
-- [Performance Summary](summary_tables/summary_paper_performance.md): paper-oriented aggregate metrics, win rates, and pairwise Wilcoxon outcomes for baseline, add24h, trafficdata, and addons setups.
+- [Performance Summary](summary_tables/summary_paper_performance.md): paper-oriented aggregate means, win rates, Friedman mean ranks, Friedman omnibus tests, and pairwise Wilcoxon post-hoc comparisons with Holm adjustment for baseline, add24h, trafficdata, and addons setups.
 
 ## Window Diagnostics
 
