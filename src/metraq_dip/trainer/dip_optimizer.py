@@ -19,6 +19,7 @@ def select_surface_from_validation(
     output_history: torch.Tensor | np.ndarray,
     val_loss_history: torch.Tensor | np.ndarray,
     k_best_n: int = 10,
+    reduction: str = "mean",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     history = torch.as_tensor(output_history, dtype=torch.float32)
     losses = torch.as_tensor(val_loss_history, dtype=torch.float32)
@@ -35,7 +36,22 @@ def select_surface_from_validation(
         raise ValueError(f"k_best_n={k_best_n}")
 
     best_indices = torch.topk(losses, k_best_n, largest=False, sorted=True).indices
-    surface = history.index_select(dim=0, index=best_indices).mean(dim=0)
+    selected_history = history.index_select(dim=0, index=best_indices)
+    selected_losses = losses.index_select(dim=0, index=best_indices)
+
+    if reduction == "mean":
+        surface = selected_history.mean(dim=0)
+    elif reduction == "median":
+        surface = selected_history.median(dim=0).values
+    elif reduction == "weighted_mean":
+        weights = 1.0 / (selected_losses + 1e-8)
+        weights = weights / weights.sum()
+        surface = (selected_history * weights[:, None, None, None]).sum(dim=0)
+    else:
+        raise ValueError(
+            f"Unknown validation reduction '{reduction}'. Expected one of: mean, median, weighted_mean"
+        )
+
     return surface, best_indices
 
 
@@ -59,8 +75,10 @@ class DipOptimizer(SurfaceOptimizer):
             "cuda" if torch.cuda.is_available() else "cpu"
         )
 
-        if self.surface_selection not in {"validation", "last"}:
-            raise ValueError("surface_selection must be one of: validation, last")
+        if self.surface_selection not in {"validation", "validation_weighted", "validation_median", "last"}:
+            raise ValueError(
+                "surface_selection must be one of: validation, validation_weighted, validation_median, last"
+            )
 
         self.optimization_loss_map = {
             "mae": "L1Loss",
@@ -308,10 +326,16 @@ class DipOptimizer(SurfaceOptimizer):
             self.selected_surface_model_space = self.artifacts["output_history"][-1]
             self.selected_epoch_indices = torch.tensor([epochs - 1], dtype=torch.long)
         else:
+            reduction = {
+                "validation": "mean",
+                "validation_weighted": "weighted_mean",
+                "validation_median": "median",
+            }[self.surface_selection]
             self.selected_surface_model_space, self.selected_epoch_indices = select_surface_from_validation(
                 output_history=self.artifacts["output_history"],
                 val_loss_history=self._get_selection_loss_history(),
                 k_best_n=self.k_best_n,
+                reduction=reduction,
             )
         self.selected_surface = self._restore_surface_to_real_values(self.selected_surface_model_space)
         return self.selected_surface.detach().cpu().numpy()

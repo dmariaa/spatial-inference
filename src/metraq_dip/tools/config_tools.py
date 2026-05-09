@@ -91,7 +91,7 @@ class TrainerConfig(BaseModel):
     ensemble_size: int = Field(gt=0)
     lr: float = Field(gt=0)
     optimization_loss: Literal["mae", "mse", "rmse"] = "mae"
-    surface_selection: Literal["validation", "last"] = "validation"
+    surface_selection: Literal["validation", "validation_weighted", "validation_median", "last"] = "validation"
 
     normalize: bool = False
     add_meteo: bool = False
