@@ -12,14 +12,14 @@ from metraq_dip.experiments import _denormalize_masked_channels
 
 
 EXPERIMENTS = (
-    "airparif_no2_baseline",
-    "airparif_no2_spatial",
-    "airparif_nox_baseline",
-    "airparif_nox_spatial",
-    "metraq_no2_baseline",
-    "metraq_no2_spatial",
-    "metraq_nox_baseline",
-    "metraq_nox_spatial",
+    "airparif_no2_add24h",
+    "airparif_no2_addons",
+    "airparif_nox_add24h",
+    "airparif_nox_addons",
+    "metraq_no2_add24h",
+    "metraq_no2_addons",
+    "metraq_nox_add24h",
+    "metraq_nox_addons",
 )
 METHODS = ("DIP", "KRG", "IDW")
 
@@ -35,14 +35,14 @@ class ExperimentSpec:
     normalize: bool
 
 POLLUTANT_META: dict[str, dict[str, object]] = {
-    "airparif_no2_baseline": {"pollutants": [1], "normalize": True},
-    "airparif_no2_spatial": {"pollutants": [1], "normalize": True},
-    "airparif_nox_baseline": {"pollutants": [2], "normalize": True},
-    "airparif_nox_spatial": {"pollutants": [2], "normalize": True},
-    "metraq_no2_baseline": {"pollutants": [8], "normalize": True},
-    "metraq_no2_spatial": {"pollutants": [8], "normalize": True},
-    "metraq_nox_baseline": {"pollutants": [12], "normalize": True},
-    "metraq_nox_spatial": {"pollutants": [12], "normalize": True},
+    "airparif_no2_add24h": {"pollutants": [1], "normalize": True},
+    "airparif_no2_addons": {"pollutants": [1], "normalize": True},
+    "airparif_nox_add24h": {"pollutants": [2], "normalize": True},
+    "airparif_nox_addons": {"pollutants": [2], "normalize": True},
+    "metraq_no2_add24h": {"pollutants": [8], "normalize": True},
+    "metraq_no2_addons": {"pollutants": [8], "normalize": True},
+    "metraq_nox_add24h": {"pollutants": [12], "normalize": True},
+    "metraq_nox_addons": {"pollutants": [12], "normalize": True},
 }
 
 
@@ -647,7 +647,7 @@ def build_compact_comparison_table(
     return _markdown_table(headers, rows)
 
 
-def build_baseline_spatial_table(
+def build_add24h_addons_table(
     frames: dict[str, pd.DataFrame],
     wape_frames: dict[str, pd.DataFrame],
 ) -> str:
@@ -663,14 +663,14 @@ def build_baseline_spatial_table(
     rows: list[list[str]] = []
 
     for prefix in ("airparif_no2", "airparif_nox", "metraq_no2", "metraq_nox"):
-        baseline = frames[f"{prefix}_baseline"].sort_values(["time_window", "sensor_group"]).reset_index(drop=True)
-        spatial = frames[f"{prefix}_spatial"].sort_values(["time_window", "sensor_group"]).reset_index(drop=True)
-        baseline_wape = wape_frames[f"{prefix}_baseline"]
-        spatial_wape = wape_frames[f"{prefix}_spatial"]
+        add24h = frames[f"{prefix}_add24h"].sort_values(["time_window", "sensor_group"]).reset_index(drop=True)
+        addons = frames[f"{prefix}_addons"].sort_values(["time_window", "sensor_group"]).reset_index(drop=True)
+        add24h_wape = wape_frames[f"{prefix}_add24h"]
+        addons_wape = wape_frames[f"{prefix}_addons"]
 
-        l1_diff = spatial["DIP_L1Loss"] - baseline["DIP_L1Loss"]
-        mse_diff = spatial["DIP_MSELoss"] - baseline["DIP_MSELoss"]
-        wape_diff = spatial_wape["DIP_WAPE"] - baseline_wape["DIP_WAPE"]
+        l1_diff = addons["DIP_L1Loss"] - add24h["DIP_L1Loss"]
+        mse_diff = addons["DIP_MSELoss"] - add24h["DIP_MSELoss"]
+        wape_diff = addons_wape["DIP_WAPE"] - add24h_wape["DIP_WAPE"]
 
         rows.append(
             [
@@ -732,12 +732,12 @@ def main(
     print(outdir / "summary_paper_performance_data.csv")
     print(outdir / "summary_paper_performance.md")
     if not experiment_folders:
-        baseline_spatial_table = build_baseline_spatial_table(frames, wape_frames)
-        (outdir / "summary_baseline_vs_spatial.md").write_text(
-            baseline_spatial_table + "\n",
+        add24h_addons_table = build_add24h_addons_table(frames, wape_frames)
+        (outdir / "summary_add24h_vs_addons.md").write_text(
+            add24h_addons_table + "\n",
             encoding="utf-8",
         )
-        print(outdir / "summary_baseline_vs_spatial.md")
+        print(outdir / "summary_add24h_vs_addons.md")
 
 
 if __name__ == "__main__":

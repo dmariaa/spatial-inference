@@ -2,7 +2,7 @@
 
 This section collects the generated documentation artifacts for the autoencoder cross-dataset NO2/NOX experiment set.
 
-The experiment set compares AIRPARIF and METRAQ sessions for NO2 and NOX, with baseline and spatial setups.
+The experiment set compares AIRPARIF and METRAQ sessions for NO2 and NOX, with add24h and addons setups.
 
 ## Summary Tables
 

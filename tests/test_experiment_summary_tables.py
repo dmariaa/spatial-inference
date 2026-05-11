@@ -48,8 +48,10 @@ def test_build_paper_performance_data_keeps_values_unformatted() -> None:
     assert list(summary["Metric"]) == ["MAE", "MSE", "WAPE"]
     assert summary.loc[summary["Metric"] == "MAE", "DIP mean"].iloc[0] == 2.0
     assert summary.loc[summary["Metric"] == "MAE", "DIP win pct"].iloc[0] == 100.0
-    assert summary.loc[summary["Metric"] == "MAE", "DIP vs KRG direction"].iloc[0] == "DIP lower"
+    assert summary.loc[summary["Metric"] == "MAE", "DIP mean rank"].iloc[0] == 1.0
+    assert summary.loc[summary["Metric"] == "MAE", "DIP vs KRG direction"].iloc[0] == "DIP"
     assert isinstance(summary.loc[summary["Metric"] == "MAE", "DIP vs KRG pvalue"].iloc[0], float)
+    assert isinstance(summary.loc[summary["Metric"] == "MAE", "DIP vs KRG holm pvalue"].iloc[0], float)
 
 
 def test_render_paper_performance_table_formats_markdown() -> None:
@@ -66,19 +68,27 @@ def test_render_paper_performance_table_formats_markdown() -> None:
                 "DIP win pct": 100.0,
                 "KRG win pct": 0.0,
                 "IDW win pct": 0.0,
-                "DIP vs KRG direction": "DIP lower",
+                "DIP mean rank": 1.0,
+                "KRG mean rank": 2.0,
+                "IDW mean rank": 3.0,
+                "Friedman pvalue": 0.04,
+                "DIP vs KRG direction": "DIP",
                 "DIP vs KRG pvalue": 0.01,
-                "DIP vs IDW direction": "DIP lower",
+                "DIP vs KRG holm pvalue": 0.01,
+                "DIP vs IDW direction": "DIP",
                 "DIP vs IDW pvalue": 0.2,
-                "KRG vs IDW direction": "KRG lower",
+                "DIP vs IDW holm pvalue": 0.2,
+                "KRG vs IDW direction": "KRG",
                 "KRG vs IDW pvalue": 0.03,
+                "KRG vs IDW holm pvalue": 0.03,
             }
         ]
     )
 
     markdown = render_paper_performance_table(summary)
 
-    assert "| Dataset | Pollutant | Setup | Metric | DIP | KRG | IDW | DIP win % |" in markdown
-    assert "| METRAQ | NO | baseline | MAE | **1.000** | 2.000 | 3.000 | **100.0** |" in markdown
-    assert "DIP lower (p=.010)" in markdown
-    assert "DIP lower, n.s. (p=.200)" in markdown
+    assert "| Dataset | Pollutant | Setup | Metric | DIP | KRG | IDW | DIP <br> win % |" in markdown
+    assert (
+        "| METRAQ | NO | baseline | MAE | **1.000** | 2.000 | 3.000 | "
+        "**100.0** | 0.0 | 0.0 | **1.000** | 2.000 | 3.000 | p=.040 | p=.010 | n.s. | p=.030 |"
+    ) in markdown

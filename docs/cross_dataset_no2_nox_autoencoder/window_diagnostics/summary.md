@@ -1,6 +1,6 @@
 # Cross-Dataset NO2/NOX Autoencoder Window Diagnostics
 
-Aggregate diagnostics for baseline autoencoder cross-dataset windows. Lower values are better for L1 and MSE.
+Aggregate diagnostics for add24h autoencoder cross-dataset windows. Lower values are better for L1 and MSE.
 
 | Experiment | DIP L1 | KRG L1 | IDW L1 | DIP<KRG L1 % | DIP MSE | KRG MSE | IDW MSE |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

@@ -8,27 +8,27 @@ import pandas as pd
 import yaml
 
 
-BASELINE_EXPERIMENTS = (
-    "airparif_no2_baseline",
-    "airparif_nox_baseline",
-    "metraq_no2_baseline",
-    "metraq_nox_baseline",
+ADD24_EXPERIMENTS = (
+    "airparif_no2_add24h",
+    "airparif_nox_add24h",
+    "metraq_no2_add24h",
+    "metraq_nox_add24h",
 )
-SPATIAL_EXPERIMENTS = (
-    "airparif_no2_spatial",
-    "airparif_nox_spatial",
-    "metraq_no2_spatial",
-    "metraq_nox_spatial",
+ADDONS_EXPERIMENTS = (
+    "airparif_no2_addons",
+    "airparif_nox_addons",
+    "metraq_no2_addons",
+    "metraq_nox_addons",
 )
 EXPERIMENT_LABELS = {
-    "airparif_no2_baseline": "AIRPARIF_NO2",
-    "airparif_nox_baseline": "AIRPARIF_NOX",
-    "metraq_no2_baseline": "METRAQ_NO2",
-    "metraq_nox_baseline": "METRAQ_NOX",
-    "airparif_no2_spatial": "AIRPARIF_NO2_SPATIAL",
-    "airparif_nox_spatial": "AIRPARIF_NOX_SPATIAL",
-    "metraq_no2_spatial": "METRAQ_NO2_SPATIAL",
-    "metraq_nox_spatial": "METRAQ_NOX_SPATIAL",
+    "airparif_no2_add24h": "AIRPARIF_NO2",
+    "airparif_nox_add24h": "AIRPARIF_NOX",
+    "metraq_no2_add24h": "METRAQ_NO2",
+    "metraq_nox_add24h": "METRAQ_NOX",
+    "airparif_no2_addons": "AIRPARIF_NO2_ADDONS",
+    "airparif_nox_addons": "AIRPARIF_NOX_ADDONS",
+    "metraq_no2_addons": "METRAQ_NO2_ADDONS",
+    "metraq_nox_addons": "METRAQ_NOX_ADDONS",
 }
 
 
@@ -162,7 +162,7 @@ def main(
     *,
     root: Path = Path("output/experiments/cross_dataset_no2_nox_autoencoder"),
     outdir: Path | None = None,
-    include_spatial: bool = False,
+    include_addons: bool = False,
     top_n: int = 5,
     experiment_folders: tuple[Path, ...] = (),
     dataset: str = "METRAQ",
@@ -183,9 +183,9 @@ def main(
                 )
             )
     else:
-        experiments = list(BASELINE_EXPERIMENTS)
-        if include_spatial:
-            experiments.extend(SPATIAL_EXPERIMENTS)
+        experiments = list(ADD24_EXPERIMENTS)
+        if include_addons:
+            experiments.extend(ADDONS_EXPERIMENTS)
 
         for experiment in experiments:
             experiment_root = root / experiment
@@ -215,7 +215,7 @@ if __name__ == "__main__":
         type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
         default=None,
     )
-    @click.option("--include-spatial", is_flag=True)
+    @click.option("--include-addons", is_flag=True)
     @click.option("--top-n", type=int, default=5)
     @click.option(
         "--experiment-folder",
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     def cli(
         root: Path,
         outdir: Path | None,
-        include_spatial: bool,
+        include_addons: bool,
         top_n: int,
         experiment_folders: tuple[Path, ...],
         dataset: str,
@@ -238,7 +238,7 @@ if __name__ == "__main__":
         main(
             root=root,
             outdir=outdir,
-            include_spatial=include_spatial,
+            include_addons=include_addons,
             top_n=top_n,
             experiment_folders=experiment_folders,
             dataset=dataset,
