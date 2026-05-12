@@ -53,6 +53,15 @@ def test_session_config_accepts_valid_random_time_windows_config():
     assert config.model.learned_upsampling is False
 
 
+def test_session_config_accepts_optimization_timesteps():
+    payload = _base_config()
+    payload["optimization_timesteps"] = "last"
+
+    config = SessionConfig.model_validate(payload)
+
+    assert config.optimization_timesteps == "last"
+
+
 def test_session_config_accepts_valid_all_time_windows_config():
     payload = _base_config()
     payload.pop("random_time_windows")
