@@ -55,6 +55,65 @@ def test_get_artifacts_requires_optimization():
         optimizer.get_artifacts()
 
 
+def test_dip_optimizer_can_scope_optimization_to_last_timestep():
+    optimizer = DipOptimizer(
+        configuration={
+            "epochs": 1,
+            "lr": 1e-3,
+            "optimization_timesteps": "last",
+            "model": {
+                "base_channels": 1,
+                "levels": 1,
+                "preserve_time": True,
+                "learned_upsampling": False,
+            },
+        },
+        split_data={
+            "input_data": np.zeros((1, 3, 1, 1), dtype=np.float32),
+            "train_data": np.zeros((1, 3, 1, 1), dtype=np.float32),
+            "val_data": np.zeros((1, 3, 1, 1), dtype=np.float32),
+            "train_mask": np.ones((1, 3, 1, 1), dtype=bool),
+            "val_mask": np.ones((1, 3, 1, 1), dtype=bool),
+        },
+        disable_tqdm=True,
+    )
+    y = torch.arange(3, dtype=torch.float32).view(1, 1, 3, 1, 1)
+    y_hat = y + 10.0
+    mask = torch.ones_like(y, dtype=torch.bool)
+
+    sliced_y, sliced_y_hat, sliced_mask = optimizer._get_optimization_tensors(y, y_hat, mask)
+
+    assert sliced_y.shape == (1, 1, 1, 1, 1)
+    assert sliced_y.item() == 2.0
+    assert sliced_y_hat.item() == 12.0
+    assert sliced_mask.item() is True
+
+
+def test_dip_optimizer_rejects_unknown_optimization_timesteps():
+    with pytest.raises(ValueError, match="optimization_timesteps"):
+        DipOptimizer(
+            configuration={
+                "epochs": 1,
+                "lr": 1e-3,
+                "optimization_timesteps": "middle",
+                "model": {
+                    "base_channels": 1,
+                    "levels": 1,
+                    "preserve_time": True,
+                    "learned_upsampling": False,
+                },
+            },
+            split_data={
+                "input_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+                "train_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+                "val_data": np.zeros((1, 1, 1, 1), dtype=np.float32),
+                "train_mask": np.ones((1, 1, 1, 1), dtype=bool),
+                "val_mask": np.ones((1, 1, 1, 1), dtype=bool),
+            },
+            disable_tqdm=True,
+        )
+
+
 def test_dip_optimizer_returns_surface_and_artifacts():
     torch.manual_seed(0)
 

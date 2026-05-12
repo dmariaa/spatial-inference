@@ -70,11 +70,14 @@ class DipOptimizer(SurfaceOptimizer):
 
         self.k_best_n = self.config.get("k_best_n") or 10
         self.optimization_loss = str(self.config.get("optimization_loss", "mae")).lower()
+        self.optimization_timesteps = str(self.config.get("optimization_timesteps", "all")).lower()
         self.surface_selection = str(self.config.get("surface_selection", "validation")).lower()
         self.device = torch.device(device) if device is not None else torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
 
+        if self.optimization_timesteps not in {"all", "last"}:
+            raise ValueError("optimization_timesteps must be one of: all, last")
         if self.surface_selection not in {"validation", "validation_weighted", "validation_median", "last"}:
             raise ValueError(
                 "surface_selection must be one of: validation, validation_weighted, validation_median, last"
@@ -257,6 +260,17 @@ class DipOptimizer(SurfaceOptimizer):
     def _get_optimization_loss(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
         return losses[self.optimization_loss_map[self.optimization_loss]]
 
+    def _get_optimization_tensors(
+        self,
+        y: torch.Tensor,
+        y_hat: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.optimization_timesteps == "all":
+            return y, y_hat, mask
+
+        return y[:, :, -1:, ...], y_hat[:, :, -1:, ...], mask[:, :, -1:, ...]
+
     def _record_epoch(
         self,
         *,
@@ -277,7 +291,12 @@ class DipOptimizer(SurfaceOptimizer):
         self.model.train()
         self.optimizer.zero_grad()
         y_hat = self._call_model(x)
-        train_losses = get_losses(self.train_data, y_hat, self.train_mask)
+        train_y, train_y_hat, train_mask = self._get_optimization_tensors(
+            self.train_data,
+            y_hat,
+            self.train_mask,
+        )
+        train_losses = get_losses(train_y, train_y_hat, train_mask)
         optimization_loss = self._get_optimization_loss(train_losses)
         optimization_loss.backward()
         self.optimizer.step()
@@ -285,7 +304,12 @@ class DipOptimizer(SurfaceOptimizer):
         self.model.eval()
         with torch.no_grad():
             y_hat = self._call_model(x)
-            val_losses = get_losses(self.val_data, y_hat, self.val_mask)
+            val_y, val_y_hat, val_mask = self._get_optimization_tensors(
+                self.val_data,
+                y_hat,
+                self.val_mask,
+            )
+            val_losses = get_losses(val_y, val_y_hat, val_mask)
 
         output = y_hat[0, :, -1, ...]
         self._record_epoch(

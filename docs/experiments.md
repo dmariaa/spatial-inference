@@ -33,6 +33,7 @@ Runtime values such as `date`, `validation_sensors`, and `test_sensors` are inje
 | `ensemble_size` | `int` | Number of independent optimizer members. |
 | `lr` | `float` | Adam learning rate. |
 | `optimization_loss` | `mae`, `mse`, or `rmse` | Loss used for optimization. |
+| `optimization_timesteps` | `all` or `last` | Pollutant target timesteps included in train/validation loss. `all` keeps the current full-window supervision; `last` optimizes only the final hour. Defaults to `all`. |
 | `surface_selection` | `validation` or `last` | Chooses the final DIP surface from the best validation epochs or the last epoch. Defaults to `validation`. |
 | `normalize` | `bool` | Enables dataset normalization when true. |
 | `add_meteo` | `bool` | Adds meteorological input channels. |
