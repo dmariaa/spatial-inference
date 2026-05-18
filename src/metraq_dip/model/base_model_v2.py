@@ -3,15 +3,27 @@ from typing import Any
 import torch
 from torch import nn
 
+KernelSize3D = int | tuple[int, int, int]
+
 
 class ConvBlock3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: KernelSize3D = 3):
         super(ConvBlock3D, self).__init__()
         self.net = nn.Sequential(
-            nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1),
+            nn.Conv3d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                padding="same",
+            ),
             nn.BatchNorm3d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1),
+            nn.Conv3d(
+                in_channels=out_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                padding="same",
+            ),
             nn.BatchNorm3d(out_channels),
             nn.ReLU(inplace=True),
         )
@@ -21,9 +33,15 @@ class ConvBlock3D(nn.Module):
         return x
 
 class DownSampleBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=(1, 2, 2)):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        stride=(1, 2, 2),
+        kernel_size: KernelSize3D = 3,
+    ):
         super(DownSampleBlock, self).__init__()
-        self.enc_block = ConvBlock3D(in_channels, out_channels)
+        self.enc_block = ConvBlock3D(in_channels, out_channels, kernel_size=kernel_size)
         self.down_block = nn.Conv3d(out_channels, out_channels, kernel_size=stride, stride=stride)
 
     def forward(self, x: torch.Tensor) -> tuple[Any, Any]:
@@ -33,7 +51,15 @@ class DownSampleBlock(nn.Module):
         return x, skip
 
 class UpSampleBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, skip_channels, stride=(1, 2, 2), learned_upsampling: bool = False):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        skip_channels,
+        stride=(1, 2, 2),
+        kernel_size: KernelSize3D = 3,
+        learned_upsampling: bool = False,
+    ):
         super(UpSampleBlock, self).__init__()
         self.learned_upsampling = learned_upsampling
 
@@ -50,7 +76,7 @@ class UpSampleBlock(nn.Module):
             # nn.Dropout3d(p=0.75),
             nn.Conv3d(in_channels, out_channels, kernel_size=1),
             nn.ReLU(inplace=True),
-            ConvBlock3D(out_channels, out_channels)
+            ConvBlock3D(out_channels, out_channels, kernel_size=kernel_size)
         )
 
         self.skip_fuse = nn.Conv3d(in_channels + skip_channels, in_channels, kernel_size=1)
@@ -73,7 +99,8 @@ class UpSampleBlock(nn.Module):
 
 class Autoencoder3D(nn.Module):
     def __init__(self,  *, in_channels: int, out_channels: int, base_channels: int, levels: int = 3,
-                 preserve_time: bool = True, use_skip_connections: bool = False, learned_upsampling: bool = False):
+                 preserve_time: bool = True, kernel_size: KernelSize3D = 3,
+                 use_skip_connections: bool = False, learned_upsampling: bool = False):
         super(Autoencoder3D, self).__init__()
         self.use_skip_connections = use_skip_connections
         self.learned_upsampling = learned_upsampling
@@ -85,21 +112,30 @@ class Autoencoder3D(nn.Module):
         chs = []
         for i in range(levels):
             out_ch = base_channels * (2 ** i)
-            enc_blocks.append(DownSampleBlock(ch, out_ch, stride=self.stride))
+            enc_blocks.append(DownSampleBlock(ch, out_ch, stride=self.stride, kernel_size=kernel_size))
             chs.append(out_ch)
             ch = out_ch
 
         self.enc_blocks = nn.ModuleList(enc_blocks)
 
         # --- Bottleneck ---
-        self.bottleneck = ConvBlock3D(ch, ch)
+        self.bottleneck = ConvBlock3D(ch, ch, kernel_size=kernel_size)
 
         # --- Decoder ---
         dec_blocks = []
         for i in reversed(range(levels)):
             in_ch = base_channels * (2 ** i)
             skip_ch = chs[i]
-            dec_blocks.append(UpSampleBlock(ch, in_ch, skip_ch, stride=self.stride, learned_upsampling=self.learned_upsampling))
+            dec_blocks.append(
+                UpSampleBlock(
+                    ch,
+                    in_ch,
+                    skip_ch,
+                    stride=self.stride,
+                    kernel_size=kernel_size,
+                    learned_upsampling=self.learned_upsampling,
+                )
+            )
             ch = in_ch
 
         self.dec_blocks = nn.ModuleList(dec_blocks)

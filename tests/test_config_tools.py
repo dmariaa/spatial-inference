@@ -51,6 +51,24 @@ def test_session_config_accepts_valid_random_time_windows_config():
     assert config.random_time_windows.start_hours == [8, 8, 9, 10]
     assert config.all_time_windows is None
     assert config.model.learned_upsampling is False
+    assert config.model.kernel_size == 3
+
+
+def test_session_config_accepts_3d_kernel_size():
+    payload = _base_config()
+    payload["model"]["kernel_size"] = [3, 5, 5]
+
+    config = SessionConfig.model_validate(payload)
+
+    assert config.model.kernel_size == (3, 5, 5)
+
+
+def test_session_config_rejects_invalid_kernel_size():
+    payload = _base_config()
+    payload["model"]["kernel_size"] = [3, 5]
+
+    with pytest.raises(ValueError, match="kernel_size"):
+        SessionConfig.model_validate(payload)
 
 
 def test_session_config_accepts_optimization_timesteps():

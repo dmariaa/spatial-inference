@@ -4,15 +4,27 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+KernelSize3D = int | tuple[int, int, int]
+
 
 class ConvBlock3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: KernelSize3D = 3):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1),
+            nn.Conv3d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                padding="same",
+            ),
             nn.BatchNorm3d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv3d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1),
+            nn.Conv3d(
+                in_channels=out_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                padding="same",
+            ),
             nn.BatchNorm3d(out_channels),
             nn.ReLU(inplace=True),
         )
@@ -22,9 +34,15 @@ class ConvBlock3D(nn.Module):
 
 
 class EncoderBlock3D(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: tuple[int, int, int]):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: tuple[int, int, int],
+        kernel_size: KernelSize3D = 3,
+    ):
         super().__init__()
-        self.conv_block = ConvBlock3D(in_channels, out_channels)
+        self.conv_block = ConvBlock3D(in_channels, out_channels, kernel_size=kernel_size)
         self.downsample = nn.MaxPool3d(kernel_size=stride, stride=stride)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -40,6 +58,7 @@ class DecoderBlock3D(nn.Module):
         skip_channels: int,
         out_channels: int,
         stride: tuple[int, int, int],
+        kernel_size: KernelSize3D = 3,
         learned_upsampling: bool = False,
     ):
         super().__init__()
@@ -56,7 +75,7 @@ class DecoderBlock3D(nn.Module):
             self.upscale = nn.Upsample(scale_factor=stride, mode="trilinear", align_corners=False)
             self.upscale_projection = nn.Conv3d(in_channels, out_channels, kernel_size=1)
 
-        self.merge_block = ConvBlock3D(out_channels + skip_channels, out_channels)
+        self.merge_block = ConvBlock3D(out_channels + skip_channels, out_channels, kernel_size=kernel_size)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         x = self.upscale(x)
@@ -78,6 +97,7 @@ class UNet3D(nn.Module):
         base_channels: int,
         levels: int = 3,
         preserve_time: bool = True,
+        kernel_size: KernelSize3D = 3,
         learned_upsampling: bool = False,
     ):
         super().__init__()
@@ -96,15 +116,22 @@ class UNet3D(nn.Module):
         encoder_blocks = []
         current_channels = in_channels
         for out_block_channels in encoder_channels:
-            encoder_blocks.append(EncoderBlock3D(current_channels, out_block_channels, stride=self.stride))
+            encoder_blocks.append(
+                EncoderBlock3D(
+                    current_channels,
+                    out_block_channels,
+                    stride=self.stride,
+                    kernel_size=kernel_size,
+                )
+            )
             current_channels = out_block_channels
         self.encoder_blocks = nn.ModuleList(encoder_blocks)
 
         self.bottleneck = nn.Sequential(
-            nn.Conv3d(current_channels, bottleneck_channels, kernel_size=3, padding=1),
+            nn.Conv3d(current_channels, bottleneck_channels, kernel_size=kernel_size, padding="same"),
             nn.BatchNorm3d(bottleneck_channels),
             nn.ReLU(inplace=True),
-            ConvBlock3D(bottleneck_channels, bottleneck_channels),
+            ConvBlock3D(bottleneck_channels, bottleneck_channels, kernel_size=kernel_size),
         )
 
         decoder_blocks = []
@@ -116,6 +143,7 @@ class UNet3D(nn.Module):
                     skip_channels=skip_channels,
                     out_channels=skip_channels,
                     stride=self.stride,
+                    kernel_size=kernel_size,
                     learned_upsampling=self.learned_upsampling,
                 )
             )

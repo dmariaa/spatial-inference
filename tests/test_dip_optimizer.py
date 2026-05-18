@@ -55,6 +55,39 @@ def test_get_artifacts_requires_optimization():
         optimizer.get_artifacts()
 
 
+def test_dip_optimizer_builds_model_with_configured_kernel_size():
+    optimizer = DipOptimizer(
+        configuration={
+            "epochs": 1,
+            "lr": 1e-3,
+            "model": {
+                "architecture": "autoencoder",
+                "base_channels": 1,
+                "levels": 1,
+                "preserve_time": True,
+                "kernel_size": (3, 5, 5),
+                "learned_upsampling": False,
+                "skip_connections": False,
+            },
+        },
+        split_data={
+            "input_data": np.zeros((1, 3, 8, 8), dtype=np.float32),
+            "train_data": np.zeros((1, 3, 8, 8), dtype=np.float32),
+            "val_data": np.zeros((1, 3, 8, 8), dtype=np.float32),
+            "train_mask": np.ones((1, 3, 8, 8), dtype=bool),
+            "val_mask": np.ones((1, 3, 8, 8), dtype=bool),
+        },
+        disable_tqdm=True,
+        device="cpu",
+    )
+    optimizer._prepare_split_tensors()
+
+    model = optimizer._get_model()
+    conv = next(module for module in model.modules() if isinstance(module, torch.nn.Conv3d))
+
+    assert conv.kernel_size == (3, 5, 5)
+
+
 def test_dip_optimizer_can_scope_optimization_to_last_timestep():
     optimizer = DipOptimizer(
         configuration={

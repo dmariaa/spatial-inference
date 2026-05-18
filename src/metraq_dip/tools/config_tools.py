@@ -7,6 +7,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+KernelSize3D = int | tuple[int, int, int]
+
 
 def _normalize_start_hours(start_hours: list[int], *, deduplicate: bool) -> list[int]:
     normalized: list[int] = []
@@ -32,8 +34,31 @@ class ModelConfig(BaseModel):
     base_channels: int = Field(gt=0)
     levels: int = Field(gt=0)
     preserve_time: bool
+    kernel_size: KernelSize3D = 3
     learned_upsampling: bool
     skip_connections: bool | None = None
+
+    @field_validator("kernel_size", mode="before")
+    @classmethod
+    def validate_kernel_size(cls, value: Any) -> KernelSize3D:
+        if isinstance(value, bool):
+            raise ValueError("model.kernel_size must be a positive integer or three positive integers.")
+        if isinstance(value, int):
+            if value <= 0:
+                raise ValueError("model.kernel_size must be positive.")
+            return value
+        if isinstance(value, (list, tuple)):
+            if len(value) != 3:
+                raise ValueError("model.kernel_size must contain exactly three values: time, height, width.")
+            normalized = []
+            for item in value:
+                if isinstance(item, bool):
+                    raise ValueError("model.kernel_size values must be positive integers.")
+                normalized.append(int(item))
+            if any(item <= 0 for item in normalized):
+                raise ValueError("model.kernel_size values must be positive integers.")
+            return tuple(normalized)
+        raise ValueError("model.kernel_size must be a positive integer or three positive integers.")
 
     @model_validator(mode="after")
     def validate_architecture_specific_fields(self) -> "ModelConfig":

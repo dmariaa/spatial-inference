@@ -8,13 +8,14 @@ from metraq_dip.data import data as data_module
 
 def _fake_to_grid(*, data: np.ndarray, sensor_ids: list[int], grid_ctx: dict, aq_backend=None):
     mapping = {10: (0, 0), 20: (0, 1), 30: (1, 0), 40: (1, 1)}
-    channels, timestamps, _ = data.shape
+    data = np.asarray(data)
+    *prefix_shape, _ = data.shape
     rows, cols = grid_ctx["grid"].shape
-    grid = np.zeros((channels, timestamps, rows, cols), dtype=np.float32)
+    grid = np.zeros((*prefix_shape, rows, cols), dtype=np.float32)
 
     for sensor_idx, sensor_id in enumerate(sensor_ids):
         row, col = mapping[int(sensor_id)]
-        grid[:, :, row, col] = data[:, :, sensor_idx]
+        grid[..., row, col] = data[..., sensor_idx]
 
     return grid
 
@@ -69,11 +70,20 @@ def test_collect_data_returns_only_static_components(monkeypatch):
         "generate_pollutant_magnitudes",
         lambda **kwargs: (pollutant_data, time_index, [10, 20, 30, 40], None),
     )
-    monkeypatch.setattr(data_module, "generate_dimensions", lambda grid_ctx, hours: np.full((3, hours, 2, 2), 10.0, dtype=np.float32))
+    monkeypatch.setattr(
+        data_module,
+        "generate_spatial_dimensions",
+        lambda grid_ctx: np.full((2, 2, 2), 10.0, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "generate_temporal_dimensions",
+        lambda grid_ctx, hours: np.full((1, hours, 2, 2), 10.0, dtype=np.float32),
+    )
     monkeypatch.setattr(
         data_module,
         "generate_hour_of_day_coords",
-        lambda time_index, rows, cols: np.full((2, len(time_index), rows, cols), 20.0, dtype=np.float32),
+        lambda time_index, rows, cols: np.full((2 * len(time_index), rows, cols), 20.0, dtype=np.float32),
     )
     monkeypatch.setattr(
         data_module,
@@ -119,7 +129,7 @@ def test_collect_data_returns_only_static_components(monkeypatch):
     assert result["static_input_prefix"].shape == (6, 2, 2, 2)
     assert result["static_input_suffix"].shape == (2, 2, 2, 2)
     assert result["test_mask"].dtype == np.bool_
-    np.testing.assert_array_equal(result["test_mask"][0, 0], np.array([[False, False], [False, True]]))
+    np.testing.assert_array_equal(result["test_mask"], np.array([[False, False], [False, True]]))
     np.testing.assert_array_equal(result["test_data"][0, :, 1, 1], np.array([4.0, 8.0], dtype=np.float32))
 
 
@@ -139,11 +149,20 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
         "generate_pollutant_magnitudes",
         lambda **kwargs: (pollutant_data, time_index, [10, 20, 30, 40], None),
     )
-    monkeypatch.setattr(data_module, "generate_dimensions", lambda grid_ctx, hours: np.full((3, hours, 2, 2), 10.0, dtype=np.float32))
+    monkeypatch.setattr(
+        data_module,
+        "generate_spatial_dimensions",
+        lambda grid_ctx: np.full((2, 2, 2), 10.0, dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "generate_temporal_dimensions",
+        lambda grid_ctx, hours: np.full((1, hours, 2, 2), 10.0, dtype=np.float32),
+    )
     monkeypatch.setattr(
         data_module,
         "generate_hour_of_day_coords",
-        lambda time_index, rows, cols: np.full((2, len(time_index), rows, cols), 20.0, dtype=np.float32),
+        lambda time_index, rows, cols: np.full((2 * len(time_index), rows, cols), 20.0, dtype=np.float32),
     )
     monkeypatch.setattr(
         data_module,
@@ -190,9 +209,9 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
     )
 
     assert result["input_data"].shape == (13, 2, 2, 2)
-    np.testing.assert_array_equal(result["train_mask"][0, 0], np.array([[True, True], [False, False]]))
-    np.testing.assert_array_equal(result["val_mask"][0, 0], np.array([[False, False], [True, False]]))
-    np.testing.assert_array_equal(result["test_mask"][0, 0], np.array([[False, False], [False, True]]))
+    np.testing.assert_array_equal(result["train_mask"], np.array([[True, True], [False, False]]))
+    np.testing.assert_array_equal(result["val_mask"], np.array([[False, False], [True, False]]))
+    np.testing.assert_array_equal(result["test_mask"], np.array([[False, False], [False, True]]))
 
     np.testing.assert_array_equal(result["input_data"][:2], np.full((2, 2, 2, 2), 99.0, dtype=np.float32))
     np.testing.assert_array_equal(result["input_data"][2:8], static_data["static_input_prefix"])
@@ -322,6 +341,7 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
     expected_test_data[0, :, 1, 1] = (np.array([4.0, 8.0], dtype=np.float32) - expected_mean) / (expected_std + 1e-6)
 
     assert static_data["pollutant_norm_channels"] is not None
+    assert static_data["pollutant_norm_channels"].shape == (2, 2, 2)
     np.testing.assert_allclose(expected_stats, (expected_mean, expected_std))
     np.testing.assert_allclose(static_data["test_data"], expected_test_data)
 
@@ -347,6 +367,9 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
 
     assert result_one["normalization_stats"][7] == expected_stats
     assert result_two["normalization_stats"][7] == expected_stats
+    assert result_one["input_data"].shape == (5, 2, 2, 2)
+    np.testing.assert_allclose(result_one["input_data"][1], np.full((2, 2, 2), expected_mean, dtype=np.float32))
+    np.testing.assert_allclose(result_one["input_data"][2], np.full((2, 2, 2), expected_std, dtype=np.float32))
     np.testing.assert_allclose(result_one["test_data"], static_data["test_data"])
     np.testing.assert_allclose(result_two["test_data"], static_data["test_data"])
 

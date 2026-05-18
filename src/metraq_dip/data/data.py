@@ -9,7 +9,7 @@ from scipy.ndimage import distance_transform_edt
 
 from metraq_dip.data.aq_backends import AQBackend
 from metraq_dip.data.traffic_data import get_traffic_grid
-from metraq_dip.tools.grid import map_sensor_ids_to_grid, prepare_grid_context
+from metraq_dip.tools.grid import prepare_grid_context, to_grid
 from metraq_dip.tools.random_tools import get_random_sensors
 
 
@@ -154,6 +154,55 @@ def generate_pollutant_magnitudes(start_date: datetime,
                                   sensor_ids: list[int],
                                   normalize: bool,
                                   aq_backend: AQBackend) -> tuple[np.ndarray,DatetimeIndex,list,dict]:
+    """
+        Fetch pollutant measurements and map them from sensor space to grid space.
+
+        The returned tensor has shape:
+
+            (2 * n_pollutants, T, H, W)
+
+        Channels are interleaved by pollutant:
+
+            pollutant_1_value
+            pollutant_1_availability_mask
+            pollutant_2_value
+            pollutant_2_availability_mask
+            ...
+
+        The availability mask is temporal because it represents whether a pollutant
+        value exists for each timestamp and sensor. It is different from the
+        train/validation/test sensor masks, which are spatial masks.
+
+        Parameters
+        ----------
+        start_date:
+            First timestamp to include.
+        end_date:
+            Last timestamp to include.
+        pollutants:
+            Pollutant magnitude ids to fetch.
+        grid_ctx:
+            Grid context returned by `prepare_grid_context`.
+        sensor_ids:
+            Sensor ids defining the sensor axis before gridding.
+        normalize:
+            Whether to normalize pollutant values inside `get_magnitudes_data`.
+        aq_backend:
+            Air-quality backend used to fetch measurements and sensor metadata.
+
+        Returns
+        -------
+        pollutant_grid_data:
+            Pollutant values and availability masks on the grid, with shape
+            `(2 * n_pollutants, T, H, W)`.
+        time_index:
+            Hourly timestamps included between `start_date` and `end_date`.
+        sensor_ids:
+            Sensor ids used for the sensor axis before gridding.
+        minmax_map:
+            Normalization statistics returned by `get_magnitudes_data` when
+            `normalize=True`; otherwise `None`.
+        """
     values, masks, time_index, sensor_ids, minmax_map = get_magnitudes_data(start_date=start_date,
                                                     end_date=end_date,
                                                     magnitudes=pollutants,
@@ -235,42 +284,6 @@ def generate_meteo_magnitudes(*, start_date: datetime,
     return X_grid, time_index, meteo_mags
 
 
-def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict, aq_backend: AQBackend):
-    """
-    Receives data in shape (channels, timestamps, sensors) and returns the same data in
-    shape (channels, timestamps, rows, cols) where rows, cols are the coordinates of the sensor in the grid.
-    Cells with no sensors have 0 value in all channels.
-
-    The sensor_ids parameter must contain the list of sensors that matches the sensors dimension of the data.
-
-    :param data:
-    :param grid_ctx:
-    :param sensor_ids:
-    :return:
-    """
-    grid = grid_ctx.get("grid")
-    h, w = grid.shape
-    m, t, s = data.shape
-
-    sensor_ids = np.asarray(sensor_ids)
-    if sensor_ids.shape[0] != s:
-        raise ValueError(f"sensor_ids length ({sensor_ids.shape[0]}) does not match data sensors dimension ({s})")
-    df_sensors = aq_backend.get_sensors(sensors=sensor_ids.tolist())
-
-    rows, cols, mapped = map_sensor_ids_to_grid(
-        grid_ctx,
-        df_sensors,
-        sensor_ids,
-        warn_prefix="AQ to_grid",
-    )
-
-    X_new = np.zeros((m, t, h, w), dtype=np.float32)
-    if mapped.any():
-        X_new[:, :, rows[mapped], cols[mapped]] = data[:, :, mapped]
-
-    return X_new
-
-
 def generate_distance_to_sensors(sensors_mask: np.ndarray, T: int, normalize: str = "max", eps: float = 1e-6) \
         -> np.ndarray:
     sensors_mask = sensors_mask.astype(bool)
@@ -294,23 +307,68 @@ def generate_distance_to_sensors(sensors_mask: np.ndarray, T: int, normalize: st
     dist_ch = np.tile(dist_n, (1, T, 1, 1)).astype(np.float32)
     return dist_ch
 
-def generate_dimensions(grid_ctx: dict, T: int):
+def generate_spatial_dimensions(grid_ctx: dict) -> np.ndarray:
+    """
+        Generate normalized spatial coordinate channels for the grid.
+
+        The returned tensor has shape:
+
+            (2, H, W)
+
+        Channel layout:
+
+            0: x coordinate, normalized from -1 to 1 across columns
+            1: y coordinate, normalized from -1 to 1 across rows
+
+        Parameters
+        ----------
+        grid_ctx:
+            Grid context returned by `prepare_grid_context`.
+
+        Returns
+        -------
+        np.ndarray
+            Spatial coordinate channels with shape `(2, H, W)`.
+    """
     H, W = grid_ctx.get("grid").shape
     x = np.linspace(-1.0, 1.0, W, dtype=np.float32)
     y = np.linspace(-1.0, 1.0, H, dtype=np.float32)
-    t = np.linspace(-1.0, 1.0, T, dtype=np.float32)
 
     xx = np.tile(x[None, :], (H, 1))
     yy = np.tile(y[:, None], (1, W))
 
-    xx = np.tile(xx[None, :, :], (T, 1, 1))
-    yy = np.tile(yy[None, :, :], (T, 1, 1))
+    return np.stack([xx, yy], axis=0)
+
+
+def generate_temporal_dimensions(grid_ctx: dict, T: int) -> np.ndarray:
+    """
+       Generate a normalized temporal coordinate channel for the input window.
+
+       The returned tensor has shape:
+
+           (1, T, H, W)
+
+       The same temporal value is repeated over all grid cells for each timestep.
+       Values are normalized from -1 to 1 across the input window.
+
+       Parameters
+       ----------
+       grid_ctx:
+           Grid context returned by `prepare_grid_context`.
+       T:
+           Number of timesteps in the input window.
+
+       Returns
+       -------
+       np.ndarray
+           Temporal coordinate channel with shape `(1, T, H, W)`.
+    """
+    H, W = grid_ctx.get("grid").shape
+    t = np.linspace(-1.0, 1.0, T, dtype=np.float32)
 
     tt = t[:, None, None]
     tt = np.tile(tt, (1, H, W))
-
-    coords = np.stack([xx, yy, tt], axis=0)  # (3,T,H,W)
-    return coords
+    return tt[None, ...]
 
 
 def generate_hour_of_day_coords(
@@ -336,7 +394,7 @@ def generate_hour_of_day_coords(
     sin_h = np.tile(sin_h, (1, rows, cols))  # (T,H,W)
     cos_h = np.tile(cos_h, (1, rows, cols))  # (T,H,W)
 
-    return np.stack([sin_h, cos_h], axis=0)  # (2,T,H,W)
+    return np.stack([sin_h, cos_h], axis=0).reshape(2 * T, rows, cols)  # (2*T,H,W)
 
 
 def _concatenate_parts(parts: list[np.ndarray]) -> np.ndarray | None:
@@ -351,10 +409,10 @@ def _build_sensor_mask(*, grid_ctx: dict, sensors: list[int] | np.ndarray, aq_ba
     rows, cols = grid_ctx.get("grid").shape
 
     if sensors.size == 0:
-        return np.zeros((1, 1, rows, cols), dtype=np.int32)
+        return np.zeros((rows, cols), dtype=np.int32)
 
     return to_grid(
-        data=sensors[None, None, :],
+        data=sensors,
         sensor_ids=sensors.tolist(),
         grid_ctx=grid_ctx,
         aq_backend=aq_backend,
@@ -407,8 +465,27 @@ def _apply_pollutant_normalization(*,
                                    pollutant_data: np.ndarray,
                                    pollutants: list[int],
                                    pollutant_norm_stats: dict[int, tuple[float, float]]) -> tuple[np.ndarray, np.ndarray]:
+    """
+        Normalize pollutant value channels and return static normalization channels.
+
+        `pollutant_data` is expected to use pollutant value/mask channels on axis 0,
+        with spatial dimensions on the last two axes.
+
+        Returns
+        -------
+        normalized_data:
+            Copy of `pollutant_data` with pollutant value channels normalized.
+        norm_channels:
+            Static mean/std channels with shape `(2 * n_pollutants, H, W)`.
+    """
+    if pollutant_data.ndim < 3:
+        raise ValueError(
+            "pollutant_data must have shape (channels, ..., rows, cols)"
+        )
+
     normalized_data = np.array(pollutant_data, copy=True)
     norm_channels = []
+    rows, cols = pollutant_data.shape[-2:]
 
     for idx, mag_id in enumerate(pollutants):
         value_idx = idx * 2
@@ -416,8 +493,9 @@ def _apply_pollutant_normalization(*,
 
         normalized_data[value_idx] = (normalized_data[value_idx] - mean) / (std + 1e-6)
 
-        mean_data = np.full_like(normalized_data[value_idx], mean, dtype=np.float32)
-        std_data = np.full_like(normalized_data[value_idx], std, dtype=np.float32)
+        mean_data = np.full((rows, cols), mean, dtype=np.float32)
+        std_data = np.full((rows, cols), std, dtype=np.float32)
+
         norm_channels.append(mean_data[None, ...])
         norm_channels.append(std_data[None, ...])
 
@@ -486,7 +564,7 @@ def collect_ensemble_data(*,
     if normalize:
         pollutant_norm_channels = data.get('pollutant_norm_channels')
         if pollutant_norm_channels is not None:
-            parts.append(pollutant_norm_channels)
+            parts.append(pollutant_norm_channels[:, None, :, :].repeat(data["hours"], axis=1))
 
     parts.append(pollutant_input_data * train_mask.astype(bool))
 
@@ -539,6 +617,7 @@ def collect_data(*, start_date: datetime,
                                                               sensor_ids=sensor_ids,
                                                               normalize=False,
                                                               aq_backend=aq_backend)
+
     pollutant_norm_stats = None
     pollutant_norm_channels = None
     if normalize:
@@ -552,6 +631,7 @@ def collect_data(*, start_date: datetime,
             pollutants=pollutants,
             pollutant_norm_stats=pollutant_norm_stats,
         )
+
     pollutant_value_data = np.array(pd_data[::2], copy=True)
 
     static_input_prefix = []
@@ -559,12 +639,15 @@ def collect_data(*, start_date: datetime,
 
     # Generate coordinates channels
     if add_coordinates:
-        coords = generate_dimensions(grid_ctx, hours)
-        static_input_prefix.append(coords)
+        spatial_coords = generate_spatial_dimensions(grid_ctx)
+        temporal_coord = generate_temporal_dimensions(grid_ctx, hours)
+        static_input_prefix.append(spatial_coords[:, None, :, :].repeat(hours, axis=1))
+        static_input_prefix.append(temporal_coord)
 
     # Generate time channels
     if add_time_channels:
         times = generate_hour_of_day_coords(time_index, rows, cols)
+        times = times.reshape(2, hours, rows, cols)
         static_input_prefix.append(times)
 
     # Generate traffic channels
@@ -620,27 +703,3 @@ def collect_data(*, start_date: datetime,
         'pollutant_norm_stats': pollutant_norm_stats,
     }
 
-
-if __name__ == "__main__":
-    from metraq_dip.data.aq_backends import get_aq_backend
-
-    aq_backend = get_aq_backend(dataset="metraq", backend="files")
-    static_data = collect_data(start_date=datetime.strptime('2024-03-12 09:00:00', '%Y-%m-%d %H:%M:%S'),
-                               end_date=datetime.strptime('2024-03-13 08:00:00', '%Y-%m-%d %H:%M:%S'),
-                               add_meteo=False,
-                               add_time_channels=False,
-                               add_coordinates=False,
-                               add_traffic_data=True,
-                               pollutants=[7],     # TODO: Add support for multiple pollutants
-                               test_sensors=[28079024, 28079027, 28079054, 28079058],
-                               normalize=True,
-                               aq_backend=aq_backend)
-
-    d = collect_ensemble_data(data=static_data,
-                              number_of_noise_channels=8,
-                              number_of_val_sensors=4,
-                              add_distance_to_sensors=True,
-                              normalize=True,
-                              aq_backend=aq_backend)
-
-    pass

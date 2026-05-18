@@ -9,6 +9,7 @@ This page is the entry point for the documented experiment result blocks.
 | [METRAQ NO](experiments_NO/index.md) | METRAQ NO baseline, add24h, trafficdata, and addons setups. | [Performance summary](experiments_NO/summary_tables/summary_paper_performance.md), [Window diagnostics](experiments_NO/window_diagnostics/summary.md)                        |
 | [Cross-Dataset UNet](cross_dataset_no2_nox_unet/index.md) | AIRPARIF and METRAQ NO2/NOX experiments using the UNet model. | [Performance summary](cross_dataset_no2_nox_unet/summary_paper_performance.md), [Window diagnostics](cross_dataset_no2_nox_unet/window_diagnostics/summary.md)               |
 | [Cross-Dataset Autoencoder](cross_dataset_no2_nox_autoencoder/index.md) | AIRPARIF and METRAQ NO2/NOX experiments using the autoencoder model. | [Performance summary](cross_dataset_no2_nox_autoencoder/summary_paper_performance.md), [Window diagnostics](cross_dataset_no2_nox_autoencoder/window_diagnostics/summary.md) |
+| [Basic Supervision](basic/index.md) | METRAQ NO2 and NOX add24h comparisons of last-hour-only vs all-hours pollutant supervision. | [Performance summary](basic/summary_paper_performance.md), [Window diagnostics](basic/window_diagnostics/summary.md) |
 | [Surface Selection 2023](surface_selection_2023/index.md) | METRAQ NOX 2023 comparison of ensemble vs no ensemble and the `validation`, `validation_weighted`, `validation_median`, and `last` surface selectors. | [Performance summary](surface_selection_2023/summary_paper_performance.md), [Narrative summary](surface_selection_2023/interim_summary.md)                                   |
 
 ## Experiment Inventory
@@ -47,6 +48,8 @@ Common settings unless noted: normalized inputs, ensemble size 5, best 3 models 
 | Cross-Dataset Autoencoder | metraq_nox_baseline | METRAQ | NOX | autoencoder | 1 | none |
 | Cross-Dataset Autoencoder | metraq_nox_add24h | METRAQ | NOX | autoencoder | 24 | none |
 | Cross-Dataset Autoencoder | metraq_nox_addons | METRAQ | NOX | autoencoder | 24 | coordinates, distance-to-sensors |
+| Basic Supervision | single_channel_supervision_NO2 | METRAQ | NO2 | autoencoder | 24 | none; `optimization_timesteps: last` |
+| Basic Supervision | single_channel_supervision_NOX | METRAQ | NOX | unet | 24 | none; `optimization_timesteps: last` |
 | Surface Selection 2023 | ensemble_best | METRAQ | NOX | autoencoder | 24 | none |
 | Surface Selection 2023 | ensemble_kbest_mean | METRAQ | NOX | autoencoder | 24 | none |
 | Surface Selection 2023 | ensemble_last | METRAQ | NOX | autoencoder | 24 | none |

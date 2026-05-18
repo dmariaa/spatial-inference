@@ -453,6 +453,67 @@ def map_sensor_ids_to_grid(
     return rows, cols, mapped
 
 
+def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict, aq_backend):
+    """
+    Map sensor-indexed data onto the experiment grid.
+
+    The last dimension of `data` must correspond to `sensor_ids`; all leading
+    dimensions are preserved.
+
+    Examples:
+        data shape (sensors,) -> output shape (rows, cols)
+        data shape (channels, sensors) -> output shape (channels, rows, cols)
+        data shape (channels, timestamps, sensors) -> output shape (channels, timestamps, rows, cols)
+
+    Cells without mapped sensors are filled with 0. Sensors that cannot be mapped
+    into the grid are ignored.
+
+    Parameters
+    ----------
+    data:
+        Array with shape (..., sensors).
+    sensor_ids:
+        Sensor ids aligned with the last dimension of `data`.
+    grid_ctx:
+        Grid context from `prepare_grid_context`.
+    aq_backend:
+        Air-quality backend used to fetch sensor coordinates.
+
+    Returns
+    -------
+    np.ndarray
+        Array with shape (..., rows, cols).
+    """
+    data = np.asarray(data)
+    if data.ndim < 1:
+        raise ValueError("data must have at least one dimension; the last dimension must be sensors")
+
+    grid = grid_ctx.get("grid")
+    h, w = grid.shape
+    *prefix_shape, sensor_count = data.shape
+
+    sensor_ids = np.asarray(sensor_ids)
+    if sensor_ids.shape[0] != sensor_count:
+        raise ValueError(
+            f"sensor_ids length ({sensor_ids.shape[0]}) does not match data sensors dimension ({sensor_count})"
+        )
+
+    df_sensors = aq_backend.get_sensors(sensors=sensor_ids.tolist())
+
+    rows, cols, mapped = map_sensor_ids_to_grid(
+        grid_ctx,
+        df_sensors,
+        sensor_ids,
+        warn_prefix="AQ to_grid",
+    )
+
+    gridded = np.zeros((*prefix_shape, h, w), dtype=np.float32)
+    if mapped.any():
+        gridded[..., rows[mapped], cols[mapped]] = data[..., mapped]
+
+    return gridded
+
+
 def find_grid_cell(ctx: dict, utm_x: float, utm_y: float, return_polygon: bool = False
                   ) -> Optional[Union[Tuple[int, int], Tuple[int, int, object]]]:
     """
@@ -466,9 +527,6 @@ def find_grid_cell(ctx: dict, utm_x: float, utm_y: float, return_polygon: bool =
     cell = ctx["cell_size_m"]
     grid = ctx.get("grid")
 
-    # UTM coordinates, for the northern hemisphere, grow top-bottom, left-right
-    # our returning grid is vertically inverted, as the array indexes grow in the
-    # in the opposite direction as the contained utm y coordinates do
     start_x, start_y = grid[-1, 0].bounds[0], grid[-1, 0].bounds[1]
     n_rows, n_cols = grid.shape
 

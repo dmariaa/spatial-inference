@@ -217,6 +217,7 @@ class DipOptimizer(SurfaceOptimizer):
         levels = self.config["model"]["levels"]
         base_channels = self.config["model"]["base_channels"]
         preserve_time = self.config["model"]["preserve_time"]
+        kernel_size = self.config["model"].get("kernel_size", 3)
         skip_connections = self.config["model"].get("skip_connections", False)
         learned_upsampling = self.config["model"]["learned_upsampling"]
         architecture = self.config["model"].get("architecture", "autoencoder").lower()
@@ -241,6 +242,7 @@ class DipOptimizer(SurfaceOptimizer):
             "base_channels": base_channels,
             "levels": levels,
             "preserve_time": preserve_time,
+            "kernel_size": kernel_size,
             "learned_upsampling": learned_upsampling,
         }
         if architecture == "autoencoder":
