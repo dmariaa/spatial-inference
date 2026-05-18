@@ -212,6 +212,7 @@ def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypa
     np.testing.assert_array_equal(result["train_mask"], np.array([[True, True], [False, False]]))
     np.testing.assert_array_equal(result["val_mask"], np.array([[False, False], [True, False]]))
     np.testing.assert_array_equal(result["test_mask"], np.array([[False, False], [False, True]]))
+    np.testing.assert_array_equal(result["sensors"], np.array([[10, 20], [30, 40]]))
 
     np.testing.assert_array_equal(result["input_data"][:2], np.full((2, 2, 2, 2), 99.0, dtype=np.float32))
     np.testing.assert_array_equal(result["input_data"][2:8], static_data["static_input_prefix"])

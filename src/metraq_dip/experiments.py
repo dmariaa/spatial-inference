@@ -210,7 +210,7 @@ def _build_experiment_artifacts(
         axis=0,
     )
     test_mask = np.repeat(
-        np.asarray(static_data["test_mask"], dtype=bool)[None, ...],
+        np.asarray(static_data["test_mask"], dtype=bool)[None, None, None, ...],
         repeats=ensemble_size,
         axis=0,
     )
@@ -272,7 +272,7 @@ def _build_experiment_artifacts(
     )
 
     test_data_last = np.asarray(static_data["test_data"][:, -1, ...], dtype=np.float32)
-    test_mask_last = np.asarray(static_data["test_mask"][:, 0, ...], dtype=bool)
+    test_mask_last = np.asarray(static_data["test_mask"], dtype=bool)[None, ...]
     test_k_loss = np.stack(
         [
             _build_test_loss_history_cube(

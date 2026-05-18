@@ -10,7 +10,7 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
     static_data = {
         "pollutants": [7],
         "test_data": np.full((1, 24, 1, 1), 1.25, dtype=np.float32),
-        "test_mask": np.array([[[[True]]]], dtype=bool),
+        "test_mask": np.array([[True]], dtype=bool),
     }
 
     class DummyEnsembleOptimizer:
@@ -91,7 +91,7 @@ def test_run_single_experiment_can_skip_ensemble_optimizer(monkeypatch, tmp_path
     static_data = {
         "pollutants": [7],
         "test_data": np.full((1, 1, 1, 1), 1.25, dtype=np.float32),
-        "test_mask": np.array([[[[True]]]], dtype=bool),
+        "test_mask": np.array([[True]], dtype=bool),
     }
     split_data = {
         "train_data": np.full((1, 1, 1, 1), 1.0, dtype=np.float32),

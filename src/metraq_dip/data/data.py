@@ -533,7 +533,7 @@ def collect_ensemble_data(*,
 
     train_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=train_sensors, aq_backend=aq_backend)
     val_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=val_sensors, aq_backend=aq_backend)
-    test_mask = np.array(data['test_mask'], copy=True).astype(int)
+    test_mask = _build_sensor_mask(grid_ctx=grid_ctx, sensors=test_sensors, aq_backend=aq_backend)
 
     parts = []
 
