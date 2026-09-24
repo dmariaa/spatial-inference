@@ -1,5 +1,7 @@
 # Experiments
 
+See [Execution Flow](execution_flow.md) for the function-call diagrams.
+
 `src/metraq_dip/experiments.py` runs one configured experiment session.
 The session folder is the directory containing the `config.yaml` passed to `run_experiments(config_file=...)`.
 That folder is reused for generated grid data, the aggregate result CSV, failure logs, and one compressed `.npz` artifact per processed `(sensor_group, time_window)` row.
@@ -74,6 +76,8 @@ It contains one row per scheduled `(sensor_group, time_window)` pair and is safe
 | `processed` | bool-like | True after the experiment row finishes successfully. |
 | `DIP_L1Loss` | float | Final DIP MAE on the test mask, in original units when normalization is enabled. |
 | `DIP_MSELoss` | float | Final DIP MSE on the test mask, in original units when normalization is enabled. |
+| `GP_L1Loss` | float | Spatiotemporal GP MAE at the final hour, in original units. |
+| `GP_MSELoss` | float | Spatiotemporal GP MSE at the final hour, in squared original units. |
 | `KRG_L1Loss` | float | Kriging MAE baseline. |
 | `KRG_MSELoss` | float | Kriging MSE baseline. |
 | `IDW_L1Loss` | float | Inverse-distance weighting MAE baseline. |

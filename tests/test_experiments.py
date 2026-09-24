@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from metraq_dip import experiments
 
 
-def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_path):
+@pytest.mark.parametrize("omit_serialized_targets", [False, True])
+def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_path, omit_serialized_targets):
     static_data = {
         "pollutants": [7],
         "test_data": np.full((1, 24, 1, 1), 1.25, dtype=np.float32),
@@ -49,17 +51,44 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
         captured["file"] = file
         captured["kwargs"] = kwargs
 
+    build_artifacts = experiments._build_experiment_artifacts
+
+    def build_storage_artifacts(**kwargs):
+        assert captured.get("interpolation_evaluated")
+        artifacts = build_artifacts(**kwargs)
+        if omit_serialized_targets:
+            artifacts.pop("test_data")
+            artifacts.pop("test_mask")
+        return artifacts
+
+    monkeypatch.setattr(experiments, "_build_experiment_artifacts", build_storage_artifacts)
+
     monkeypatch.setattr(experiments, "collect_data", lambda **kwargs: static_data)
     monkeypatch.setattr(experiments, "DipEnsembleOptimizer", DummyEnsembleOptimizer)
     monkeypatch.setattr(experiments, "get_aq_backend_for_config", lambda config: object())
-    def fake_get_interpolation_loss(x_data, x_mask, y_data, y_mask, pollutants):
+    def fake_get_interpolation_loss(x_data, x_mask, y_data, y_mask, pollutants, *, include_gp=False):
+        assert include_gp
         assert isinstance(x_data, np.ndarray)
         assert isinstance(x_mask, np.ndarray)
         assert isinstance(y_data, np.ndarray)
         assert isinstance(y_mask, np.ndarray)
-        assert x_data.shape == (1, 1, 1, 1)
-        assert x_mask.shape == (1, 1, 1, 1)
-        return [{"loss": 0.1}, {"loss": 0.2}, {"loss": 0.3}, {"loss": 0.4}]
+        captured["interpolation_evaluated"] = True
+        assert y_data.shape == y_mask.shape == (1, 1, 1, 1)
+        np.testing.assert_allclose(y_data, 12.5, atol=1e-5)
+        assert y_mask.all()
+        assert x_data.shape == (1, 24, 1, 1)
+        assert x_mask.shape == (1, 24, 1, 1)
+        return [
+            {"model": model, "criterion": criterion, "loss": loss}
+            for model, criterion, loss in (
+                ("SpatioTemporalGPInterpolator", "L1Loss", 0.1),
+                ("SpatioTemporalGPInterpolator", "MSELoss", 0.2),
+                ("KrigingInterpolator", "L1Loss", 0.3),
+                ("KrigingInterpolator", "MSELoss", 0.4),
+                ("IdwInterpolator", "L1Loss", 0.5),
+                ("IdwInterpolator", "MSELoss", 0.6),
+            )
+        ]
 
     monkeypatch.setattr(experiments, "get_interpolation_loss", fake_get_interpolation_loss)
     monkeypatch.setattr(experiments.np, "savez_compressed", fake_savez_compressed)
@@ -141,7 +170,17 @@ def test_run_single_experiment_can_skip_ensemble_optimizer(monkeypatch, tmp_path
     monkeypatch.setattr(
         experiments,
         "get_interpolation_loss",
-        lambda *args, **kwargs: [{"loss": 0.1}, {"loss": 0.2}, {"loss": 0.3}, {"loss": 0.4}],
+        lambda *args, **kwargs: [
+            {"model": model, "criterion": criterion, "loss": loss}
+            for model, criterion, loss in (
+                ("SpatioTemporalGPInterpolator", "L1Loss", 0.1),
+                ("SpatioTemporalGPInterpolator", "MSELoss", 0.2),
+                ("KrigingInterpolator", "L1Loss", 0.3),
+                ("KrigingInterpolator", "MSELoss", 0.4),
+                ("IdwInterpolator", "L1Loss", 0.5),
+                ("IdwInterpolator", "MSELoss", 0.6),
+            )
+        ],
     )
 
     def fake_savez_compressed(file, **kwargs):

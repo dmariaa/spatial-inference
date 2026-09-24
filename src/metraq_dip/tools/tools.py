@@ -31,34 +31,20 @@ def calculate_interpolations(
     if x_data_array.shape != x_mask_array.shape:
         raise ValueError("x_data and x_mask must have the same shape")
 
-    y_hat_grid = np.zeros_like(x_data_array, dtype=np.float32)
-    channels, timestamps, _, _ = x_data_array.shape
+    channels, _, height, width = x_data_array.shape
+    y_hat_grid = np.zeros((channels, 1, height, width), dtype=np.float32)
 
     for c in range(channels):
-        for t in range(timestamps):
-            f = x_data_array[c, t]
-            m = x_mask_array[c, t]
-
-            known_points = np.argwhere(~np.isnan(f) & m)
-            if known_points.size == 0:
-                continue
-
-            y = known_points[:, 0].astype(np.float64)
-            x = known_points[:, 1].astype(np.float64)
-            z = f[known_points[:, 0], known_points[:, 1]].astype(np.float64)
-
-            # Generate interpolator
-            interpolator = interpolator_class(x, y, z)
-
-            unknown_points = np.argwhere(~m)
-
-            # Back to the grid
-            y_hat_grid[c, t, y.astype(int), x.astype(int)] = z
-            if unknown_points.size != 0:
-                y_val = unknown_points[:, 0].astype(np.float64)
-                x_val = unknown_points[:, 1].astype(np.float64)
-                z_val = interpolator(x_val, y_val, mode="points")
-                y_hat_grid[c, t, y_val.astype(int), x_val.astype(int)] = z_val
+        interpolator = interpolator_class(x_data_array[c], x_mask_array[c])
+        surface = interpolator(
+            np.arange(width, dtype=np.float64),
+            np.arange(height, dtype=np.float64),
+            mode="grid",
+        )
+        target_data = x_data_array[c, -1]
+        target_mask = x_mask_array[c, -1] & np.isfinite(target_data)
+        surface[target_mask] = target_data[target_mask]
+        y_hat_grid[c, 0] = surface
 
     return y_hat_grid
 
@@ -106,12 +92,22 @@ def get_interpolation_loss(
     y: np.ndarray,
     y_mask: np.ndarray,
     pollutants: dict[int, str] | list[int],
+    *,
+    include_gp: bool = False,
 ) -> list[Any]:
     losses = []
 
-    from metraq_dip.tools.interpolator import KrigingInterpolator, IdwInterpolator
+    from metraq_dip.tools.interpolator import (
+        IdwInterpolator,
+        KrigingInterpolator,
+        SpatioTemporalGPInterpolator,
+    )
 
-    for interpolator in [KrigingInterpolator, IdwInterpolator]:
+    interpolators = [KrigingInterpolator, IdwInterpolator]
+    if include_gp:
+        interpolators.insert(0, SpatioTemporalGPInterpolator)
+
+    for interpolator in interpolators:
         y_hat = calculate_interpolations(x, x_mask, interpolator)
         loss = _get_numpy_metrics(y, y_hat, y_mask, pollutants)
 
