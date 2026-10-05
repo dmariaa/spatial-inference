@@ -115,8 +115,51 @@ def build_sensor_to_grid_edges(
     )
 
 
+def build_knn_sensor_to_grid_edges(
+    source_sensor_mask: np.ndarray | torch.Tensor,
+    *,
+    k: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Connect every grid node to its ``k`` nearest visible sensor nodes."""
+    mask = torch.as_tensor(source_sensor_mask, dtype=torch.bool)
+    if mask.ndim != 2 or not mask.any():
+        raise ValueError("source_sensor_mask must be a non-empty 2D mask")
+    if k <= 0:
+        raise ValueError("k must be positive")
+
+    height, width = (int(value) for value in mask.shape)
+    sources = mask.flatten().nonzero(as_tuple=False).flatten()
+    destinations = torch.arange(height * width, dtype=torch.long)
+    source_rows = torch.div(sources, width, rounding_mode="floor")
+    source_cols = sources % width
+    destination_rows = torch.div(destinations, width, rounding_mode="floor")
+    destination_cols = destinations % width
+    dx_all = (destination_cols[:, None] - source_cols[None, :]).float() / max(width - 1, 1)
+    dy_all = (source_rows[None, :] - destination_rows[:, None]).float() / max(height - 1, 1)
+    distance_all = torch.sqrt(dx_all.square() + dy_all.square())
+    candidate_count = min(int(k), int(sources.numel()))
+    candidates = torch.topk(
+        distance_all,
+        k=candidate_count,
+        dim=1,
+        largest=False,
+        sorted=True,
+    ).indices
+
+    destination_index = destinations.repeat_interleave(candidate_count)
+    source_index = sources[candidates.reshape(-1)]
+    dx = dx_all.gather(1, candidates).reshape(-1)
+    dy = dy_all.gather(1, candidates).reshape(-1)
+    distance = distance_all.gather(1, candidates).reshape(-1)
+    return (
+        torch.stack((source_index, destination_index)),
+        torch.stack((dx, dy, distance, torch.exp(-distance)), dim=1),
+    )
+
+
 __all__ = [
     "build_grid_graph",
+    "build_knn_sensor_to_grid_edges",
     "build_sensor_to_grid_edges",
     "grid_to_nodes",
     "nodes_to_grid",

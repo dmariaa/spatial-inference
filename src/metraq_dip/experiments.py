@@ -38,6 +38,7 @@ from metraq_dip.tools.results_stats import (
 from metraq_dip.tools.tools import get_interpolation_loss, is_truthy
 from metraq_dip.trainer.dip_ensemble_optimizer import DipEnsembleOptimizer, reduce_surface_ensemble
 from metraq_dip.trainer.dip_optimizer import DipOptimizer
+from metraq_dip.trainer.graph_dip_optimizer import GraphDipOptimizer
 
 
 def _get_time_windows(session_config: SessionConfig) -> list[pd.Timestamp]:
@@ -358,11 +359,24 @@ def _run_single_experiment(
         aq_backend=aq_backend,
     )
 
+    surface_optimizer = str(config.get("surface_optimizer", "dip")).lower()
+    optimizer_factories = {
+        "dip": DipOptimizer,
+        "graph_dip": GraphDipOptimizer,
+    }
+    if surface_optimizer not in optimizer_factories:
+        valid = ", ".join(sorted(optimizer_factories))
+        raise ValueError(
+            f"Unknown surface_optimizer '{surface_optimizer}'. Expected one of: {valid}"
+        )
+    optimizer_factory = optimizer_factories[surface_optimizer]
+
     if bool(config.get("use_ensemble", True)):
         optimizer = DipEnsembleOptimizer(
             configuration=config,
             static_data=static_data,
             disable_tqdm=disable_nested_tqdm,
+            optimizer_factory=optimizer_factory,
         )
     else:
         split_data = collect_ensemble_data(
@@ -373,7 +387,7 @@ def _run_single_experiment(
             normalize=bool(config.get("normalize")),
             aq_backend=aq_backend,
         )
-        optimizer = DipOptimizer(
+        optimizer = optimizer_factory(
             configuration=config,
             split_data=split_data,
             disable_tqdm=disable_nested_tqdm,

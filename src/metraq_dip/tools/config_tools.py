@@ -105,6 +105,26 @@ class AllTimeWindowsConfig(BaseModel):
         return _normalize_start_hours(value, deduplicate=True)
 
 
+class GraphDipConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nearest_sensors: int = Field(default=4, gt=0)
+    hidden_channels: int = Field(default=32, gt=0)
+    attention_heads: int = Field(default=4, gt=0)
+    local_refinement_layers: int = Field(default=1, ge=0)
+    dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    patience: int = Field(default=50, gt=0)
+    min_delta: float = Field(default=0.0, ge=0.0)
+    weight_decay: float = Field(default=1e-5, ge=0.0)
+    spatial_smoothness: float = Field(default=1e-4, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_attention_dimensions(self) -> "GraphDipConfig":
+        if self.hidden_channels % self.attention_heads:
+            raise ValueError("graph_dip.hidden_channels must be divisible by attention_heads.")
+        return self
+
+
 class TrainerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -118,6 +138,7 @@ class TrainerConfig(BaseModel):
     optimization_loss: Literal["mae", "mse", "rmse"] = "mae"
     optimization_timesteps: Literal["all", "last"] = "all"
     surface_selection: Literal["validation", "validation_weighted", "validation_median", "last"] = "validation"
+    surface_optimizer: Literal["dip", "graph_dip"] = "dip"
 
     normalize: bool = False
     add_meteo: bool = False
@@ -129,6 +150,7 @@ class TrainerConfig(BaseModel):
     k_best_n: int | None = Field(default=None, gt=0)
 
     model: ModelConfig
+    graph_dip: GraphDipConfig = Field(default_factory=GraphDipConfig)
 
     # Runtime-injected fields for each experiment:
     date: datetime | None = None

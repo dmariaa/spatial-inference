@@ -274,6 +274,7 @@ def collect_ensemble_data(*,
     test_sensors = data['test_sensors']
     pollutant_input_data = data['pollutant_data']
     pollutant_value_data = data['pollutant_value_data']
+    pollutant_observation_mask = np.asarray(data['pollutant_data'][1::2], dtype=bool)
 
     available_sensors = [sid for sid in sensor_ids if sid not in test_sensors]
     train_sensors, val_sensors, _ = get_random_sensors(
@@ -336,6 +337,7 @@ def collect_ensemble_data(*,
         'train_mask': train_mask.astype(bool),
         'val_mask': val_mask.astype(bool),
         'test_mask': test_mask.astype(bool),
+        'observation_mask': pollutant_observation_mask,
         'sensors': train_mask.astype(int) + val_mask.astype(int) + test_mask.astype(int),
         'pollutants': list(data['pollutants']),
         'normalization_stats': dict(data.get('pollutant_norm_stats') or {}) if normalize else None,

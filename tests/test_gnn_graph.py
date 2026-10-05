@@ -6,10 +6,25 @@ import torch
 
 from metraq_gnn.data.graph import (
     build_grid_graph,
+    build_knn_sensor_to_grid_edges,
     build_sensor_to_grid_edges,
     grid_to_nodes,
     nodes_to_grid,
 )
+
+
+def test_knn_sensor_edges_restrict_candidates_per_destination():
+    mask = np.zeros((3, 3), dtype=bool)
+    mask[0, 0] = True
+    mask[2, 2] = True
+
+    edge_index, edge_attr = build_knn_sensor_to_grid_edges(mask, k=1)
+
+    assert edge_index.shape == (2, 9)
+    assert edge_attr.shape == (9, 4)
+    assert torch.equal(edge_index[1], torch.arange(9))
+    assert edge_index[0, 0].item() == 0
+    assert edge_index[0, -1].item() == 8
 
 
 @pytest.mark.parametrize("array_type", [np.asarray, torch.as_tensor])

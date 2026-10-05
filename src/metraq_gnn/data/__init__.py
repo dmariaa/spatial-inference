@@ -2,6 +2,7 @@
 
 from metraq_gnn.data.graph import (
     build_grid_graph,
+    build_knn_sensor_to_grid_edges,
     build_sensor_to_grid_edges,
     grid_to_nodes,
     nodes_to_grid,
@@ -15,6 +16,7 @@ __all__ = [
     "build_graph_window",
     "build_aq_sensor_cache",
     "build_grid_graph",
+    "build_knn_sensor_to_grid_edges",
     "build_sensor_to_grid_edges",
     "AQSensorCache",
     "GraphWindowDataset",

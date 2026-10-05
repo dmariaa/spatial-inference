@@ -37,6 +37,7 @@ Runtime values such as `date`, `validation_sensors`, and `test_sensors` are inje
 | `optimization_loss` | `mae`, `mse`, or `rmse` | Loss used for optimization. |
 | `optimization_timesteps` | `all` or `last` | Pollutant target timesteps included in train/validation loss. `all` keeps the current full-window supervision; `last` optimizes only the final hour. Defaults to `all`. |
 | `surface_selection` | `validation` or `last` | Chooses the final DIP surface from the best validation epochs or the last epoch. Defaults to `validation`. |
+| `surface_optimizer` | `dip` or `graph_dip` | Selects the CNN DIP optimizer or a freshly initialized `SensorToGridGNN` optimized independently for every window. Defaults to `dip`. |
 | `normalize` | `bool` | Enables dataset normalization when true. |
 | `add_meteo` | `bool` | Adds meteorological input channels. |
 | `add_time_channels` | `bool` | Adds time-derived channels. |
@@ -51,9 +52,18 @@ Runtime values such as `date`, `validation_sensors`, and `test_sensors` are inje
 | `model.preserve_time` | `bool` | Controls whether the model preserves the time axis. |
 | `model.learned_upsampling` | `bool` | Enables learned upsampling. |
 | `model.skip_connections` | `bool`, autoencoder only | Enables autoencoder skip connections. |
+| `graph_dip.nearest_sensors` | `int` | Number of geometrically nearest TRAIN sensors connected to each grid cell. Defaults to `4`. |
+| `graph_dip.hidden_channels` | `int` | Width of the temporal and graph representations. Must be divisible by `attention_heads`. Defaults to `32`. |
+| `graph_dip.attention_heads` | `int` | GAT attention heads. Defaults to `4`. |
+| `graph_dip.local_refinement_layers` | `int` | Local grid-attention layers after sensor-to-grid propagation. Defaults to `1`. |
+| `graph_dip.patience` | `int` | Early-stopping patience measured on visible validation sensors. Defaults to `50`. |
+| `graph_dip.weight_decay` | `float` | Adam weight decay used during per-window optimization. Defaults to `1e-5`. |
+| `graph_dip.spatial_smoothness` | `float` | Weight of the local edge smoothness penalty. Defaults to `1e-4`. |
 | `spread_test_groups.*` | object | Controls held-out sensor group generation. |
 | `random_time_windows.*` | object, optional | Generates sampled windows for a year. |
 | `all_time_windows.*` | object, optional | Generates all windows for selected start hours. |
+
+Graph DIP predicts the final hour from the configured temporal window. TRAIN sensors are its only sensor-to-grid message sources and loss targets; validation sensors select the stopping point, and TEST sensors remain outside its graph, loss, and model selection. Use a new session folder because its `DIP_*` columns refer to Graph DIP rather than CNN DIP when `surface_optimizer: graph_dip`.
 
 ## `data.npz`
 
