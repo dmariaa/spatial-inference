@@ -325,6 +325,11 @@ def _build_experiment_artifacts(
     normalization_stats = optimizer_artifacts.get("normalization_stats")
     if normalization_stats is not None:
         experiment_data["normalization_stats"] = normalization_stats
+    if all("epochs_completed" in member for member in member_artifacts):
+        experiment_data["epochs_completed"] = np.asarray(
+            [int(np.asarray(member["epochs_completed"]).item()) for member in member_artifacts],
+            dtype=np.int64,
+        )
 
     return experiment_data
 

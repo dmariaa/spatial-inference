@@ -35,6 +35,7 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
                         "val_mse_history": np.array([0.02], dtype=np.float32),
                         "selected_epoch_indices": np.array([0], dtype=np.int64),
                         "surface_model_space": np.array([[[1.25]]], dtype=np.float32),
+                        "epochs_completed": np.array(1, dtype=np.int64),
                     }
                 ],
             }
@@ -112,6 +113,7 @@ def test_run_single_experiment_persists_normalization_stats(monkeypatch, tmp_pat
     assert abs(row_result["DIP_L1Loss"]) < 1e-5
     assert abs(row_result["DIP_MSELoss"]) < 1e-5
     assert captured["kwargs"]["normalization_stats"] == {7: (10.0, 2.0)}
+    np.testing.assert_array_equal(captured["kwargs"]["epochs_completed"], np.array([1]))
     np.testing.assert_allclose(captured["kwargs"]["train_output"], np.array([[1.25]], dtype=np.float32))
     np.testing.assert_allclose(captured["kwargs"]["train_output_real"], np.array([[12.5]], dtype=np.float32))
 
