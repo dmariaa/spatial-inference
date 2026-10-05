@@ -100,3 +100,47 @@ def test_graph_dip_requires_explicit_observation_mask():
 
     with pytest.raises(ValueError, match="observation_mask"):
         optimizer.optimize()
+
+
+def test_graph_dip_early_stopping_keeps_fixed_artifact_length(monkeypatch):
+    optimizer = GraphDipOptimizer(
+        configuration=graph_config(
+            epochs=5,
+            graph_dip={
+                "nearest_sensors": 1,
+                "hidden_channels": 4,
+                "attention_heads": 1,
+                "patience": 1,
+                "spatial_smoothness": 0.0,
+            },
+        ),
+        split_data=graph_split(),
+        device="cpu",
+        disable_tqdm=True,
+    )
+
+    losses = iter((1.0, 2.0))
+
+    def fake_epoch(*, step: int):
+        loss = next(losses)
+        optimizer.artifacts["output_history"][step] = float(step)
+        optimizer.artifacts["train_l1_history"][step] = loss
+        optimizer.artifacts["train_mse_history"][step] = loss
+        optimizer.artifacts["val_l1_history"][step] = loss
+        optimizer.artifacts["val_mse_history"][step] = loss
+        return {"train_mae": loss, "val_mae": loss}
+
+    monkeypatch.setattr(optimizer, "_get_model", lambda: torch.nn.Linear(1, 1))
+    monkeypatch.setattr(optimizer, "_get_optimizer", lambda: object())
+    monkeypatch.setattr(optimizer, "_run_epoch", fake_epoch)
+
+    optimizer.optimize()
+    member = optimizer.get_artifacts()["member_artifacts"][0]
+
+    assert member["epochs_completed"].item() == 2
+    assert member["output_history"].shape[0] == 5
+    expected_plateau = np.broadcast_to(
+        member["output_history"][1],
+        member["output_history"][2:].shape,
+    )
+    np.testing.assert_allclose(member["output_history"][2:], expected_plateau)

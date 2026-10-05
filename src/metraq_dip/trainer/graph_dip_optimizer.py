@@ -168,14 +168,16 @@ class GraphDipOptimizer(DipOptimizer):
                 if epochs_without_improvement >= self.patience:
                     break
 
-        for key in (
-            "output_history",
-            "train_l1_history",
-            "train_mse_history",
-            "val_l1_history",
-            "val_mse_history",
-        ):
-            self.artifacts[key] = self.artifacts[key][:completed_epochs]
+        self.artifacts["epochs_completed"] = torch.tensor(completed_epochs, dtype=torch.long)
+        if completed_epochs < epochs:
+            for key in (
+                "output_history",
+                "train_l1_history",
+                "train_mse_history",
+                "val_l1_history",
+                "val_mse_history",
+            ):
+                self.artifacts[key][completed_epochs:] = self.artifacts[key][completed_epochs - 1]
         k_best_n = min(self.k_best_n, completed_epochs)
         if self.surface_selection == "last":
             self.selected_surface_model_space = self.artifacts["output_history"][-1]
@@ -187,8 +189,8 @@ class GraphDipOptimizer(DipOptimizer):
                 "validation_median": "median",
             }[self.surface_selection]
             self.selected_surface_model_space, self.selected_epoch_indices = select_surface_from_validation(
-                output_history=self.artifacts["output_history"],
-                val_loss_history=self._get_selection_loss_history(),
+                output_history=self.artifacts["output_history"][:completed_epochs],
+                val_loss_history=self._get_selection_loss_history()[:completed_epochs],
                 k_best_n=k_best_n,
                 reduction=reduction,
             )
