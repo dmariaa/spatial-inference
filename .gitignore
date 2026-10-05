@@ -379,3 +379,5 @@ ENV/
 /tmp/
 /.idea/
 /data/
+/wandb/
+/cache/
