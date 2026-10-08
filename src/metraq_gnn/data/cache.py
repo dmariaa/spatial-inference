@@ -31,7 +31,7 @@ class AQSensorCache:
 
     @property
     def time_index(self) -> pd.DatetimeIndex:
-        return pd.to_datetime(self.timestamps_ns)
+        return pd.to_datetime(self.timestamps_ns, unit="ns")
 
     @property
     def grid_shape(self) -> tuple[int, int]:
@@ -124,7 +124,7 @@ def build_aq_sensor_cache(
             raise ValueError("all cached sensors must map to the generated grid")
         grid_shape = tuple(int(value) for value in grid_ctx["grid"].shape)
         node_indices = rows * grid_shape[1] + cols
-        timestamps = pd.date_range(start_ts, end_ts, freq="h")
+        timestamps = pd.date_range(start_ts, end_ts, freq="h").as_unit("ns")
 
         np.save(path / "timestamps.npy", timestamps.asi8)
         np.save(path / "sensor_ids.npy", sensor_ids)
