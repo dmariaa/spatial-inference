@@ -86,7 +86,8 @@ def get_grid(*, pollutants: list[int] | None = None, aq_backend: AQBackend):
 def get_data(*, start_date: datetime,
              end_date: datetime,
              magnitudes: list,
-             aq_backend: AQBackend):
+             aq_backend: AQBackend,
+             observed_only: bool = False):
     # returns data between (inclusive) both dates
     df = aq_backend.get_measurements(
         start_date=start_date,
@@ -94,6 +95,10 @@ def get_data(*, start_date: datetime,
         magnitudes=magnitudes,
     )
     time_index = pd.date_range(start=start_date, end=end_date, freq='h')
+    if observed_only:
+        if "is_interpolated" not in df.columns:
+            raise ValueError("Observed-only meteorology requires is_interpolated provenance (METRAQ files).")
+        df = df.loc[df["is_interpolated"].eq(False)].copy()
 
     return df, time_index
 
@@ -103,6 +108,7 @@ def get_magnitudes_data(*, start_date: datetime,
                         magnitudes:list,
                         sensor_ids: list[int] = None,
                         normalize: bool = False,
+                        observed_only: bool = False,
                         aq_backend: AQBackend) -> tuple[dict, dict, DatetimeIndex, list, dict]:
     """
     Returns values, masks, time_index where:
@@ -115,7 +121,8 @@ def get_magnitudes_data(*, start_date: datetime,
              (timestamp, sensor) combination that doesn't have a value and 1 elsewhere. It can be used to distinguish
              valid zero values (mask=1) from missing ones (mask=0).
     """
-    df, time_index = get_data(start_date=start_date, end_date=end_date, magnitudes=magnitudes, aq_backend=aq_backend)
+    provenance_options = {"observed_only": True} if observed_only else {}
+    df, time_index = get_data(start_date=start_date, end_date=end_date, magnitudes=magnitudes, aq_backend=aq_backend, **provenance_options)
     values: dict[int, np.ndarray] = {}
     masks: dict[int, np.ndarray] = {}
 
@@ -274,6 +281,7 @@ def collect_ensemble_data(*,
     test_sensors = data['test_sensors']
     pollutant_input_data = data['pollutant_data']
     pollutant_value_data = data['pollutant_value_data']
+    pollutant_observation_mask = np.asarray(data['pollutant_data'][1::2], dtype=bool)
 
     available_sensors = [sid for sid in sensor_ids if sid not in test_sensors]
     train_sensors, val_sensors, _ = get_random_sensors(
@@ -336,6 +344,7 @@ def collect_ensemble_data(*,
         'train_mask': train_mask.astype(bool),
         'val_mask': val_mask.astype(bool),
         'test_mask': test_mask.astype(bool),
+        'observation_mask': pollutant_observation_mask,
         'sensors': train_mask.astype(int) + val_mask.astype(int) + test_mask.astype(int),
         'pollutants': list(data['pollutants']),
         'normalization_stats': dict(data.get('pollutant_norm_stats') or {}) if normalize else None,
@@ -352,6 +361,7 @@ def collect_data(*, start_date: datetime,
                  pollutants: list[int],
                  test_sensors: list[int] = None,
                  normalize: bool = False,
+                 meteo_observed_only: bool = False,
                  aq_backend: AQBackend,
                  ) -> dict:
     """
@@ -436,6 +446,8 @@ def collect_data(*, start_date: datetime,
             grid_ctx=grid_ctx,
             sensor_ids=sensor_ids,
             aq_backend=aq_backend,
+            normalize=normalize,
+            observed_only=meteo_observed_only,
         )
         static_input_suffix.append(meteo)
 

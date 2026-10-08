@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 import numpy as np
 import torch
@@ -70,6 +71,11 @@ class DipOptimizer(SurfaceOptimizer):
 
         self.k_best_n = self.config.get("k_best_n") or 10
         self.optimization_loss = str(self.config.get("optimization_loss", "mae")).lower()
+        if self.optimization_loss == "huber" and type(self) is DipOptimizer:
+            raise ValueError("Huber loss is currently supported only by GraphDipOptimizer")
+        self.optimization_mse_weight = float(self.config.get("optimization_mse_weight", 0.1))
+        if not math.isfinite(self.optimization_mse_weight) or self.optimization_mse_weight < 0:
+            raise ValueError("optimization_mse_weight must be finite and non-negative")
         self.optimization_timesteps = str(self.config.get("optimization_timesteps", "all")).lower()
         self.surface_selection = str(self.config.get("surface_selection", "validation")).lower()
         self.device = torch.device(device) if device is not None else torch.device(
@@ -87,6 +93,8 @@ class DipOptimizer(SurfaceOptimizer):
             "mae": "L1Loss",
             "mse": "MSELoss",
             "rmse": "RMSELoss",
+            "mae_mse": "MAEMSELoss",
+            "huber": "HuberLoss",
         }
         if self.optimization_loss not in self.optimization_loss_map:
             valid_options = ", ".join(sorted(self.optimization_loss_map))
@@ -234,6 +242,8 @@ class DipOptimizer(SurfaceOptimizer):
         return torch.optim.Adam(self.model.parameters(), lr=self.config["lr"])
 
     def _get_optimization_loss(self, losses: dict[str, torch.Tensor]) -> torch.Tensor:
+        if self.optimization_loss == "mae_mse":
+            return losses["L1Loss"] + self.optimization_mse_weight * losses["MSELoss"]
         return losses[self.optimization_loss_map[self.optimization_loss]]
 
     def _get_optimization_tensors(
@@ -300,6 +310,10 @@ class DipOptimizer(SurfaceOptimizer):
         }
 
     def _get_selection_loss_history(self) -> torch.Tensor:
+        if self.optimization_loss == "huber":
+            return self.artifacts["val_huber_history"]
+        if self.optimization_loss == "mae_mse":
+            return self.artifacts["val_l1_history"] + self.optimization_mse_weight * self.artifacts["val_mse_history"]
         if self.optimization_loss == "mae":
             return self.artifacts["val_l1_history"]
         if self.optimization_loss == "mse":

@@ -2,6 +2,22 @@
 
 See [Execution Flow](execution_flow.md) for the function-call diagrams.
 
+Graph DIP also supports `optimization_loss: huber` with `huber_delta: 1.0`
+(finite and strictly positive). Huber is averaged over valid TRAIN targets
+in model space, retaining the spatial regularization term. Validation Huber
+controls early stopping and epoch selection. Per-member `train_huber_history`
+and `val_huber_history` arrays are saved in experiment artifacts; MAE/MSE
+evaluation remains unchanged. Huber is currently restricted to Graph DIP.
+
+For `optimization_loss: mae_mse`, both CNN DIP and Graph DIP optimize
+`MAE + optimization_mse_weight * MSE` in model space (normalized values when
+`normalize: true`). The weight defaults to `0.1` and must be finite and
+non-negative. Validation surface selection and Graph DIP early stopping use
+the same mixture. Graph DIP retains its separate spatial smoothness penalty
+in the training objective. Reported MAE and MSE remain separate metrics in
+original units. The NOX METRAQ configurations are
+`configs/nox_cnn_mae_mse_w01.yaml` and `configs/nox_gnn_mae_mse_w01.yaml`.
+
 `src/metraq_dip/experiments.py` runs one configured experiment session.
 The session folder is the directory containing the `config.yaml` passed to `run_experiments(config_file=...)`.
 That folder is reused for generated grid data, the aggregate result CSV, failure logs, and one compressed `.npz` artifact per processed `(sensor_group, time_window)` row.
@@ -37,6 +53,7 @@ Runtime values such as `date`, `validation_sensors`, and `test_sensors` are inje
 | `optimization_loss` | `mae`, `mse`, or `rmse` | Loss used for optimization. |
 | `optimization_timesteps` | `all` or `last` | Pollutant target timesteps included in train/validation loss. `all` keeps the current full-window supervision; `last` optimizes only the final hour. Defaults to `all`. |
 | `surface_selection` | `validation` or `last` | Chooses the final DIP surface from the best validation epochs or the last epoch. Defaults to `validation`. |
+| `surface_optimizer` | `dip` or `graph_dip` | Selects the CNN DIP optimizer or a freshly initialized `SensorToGridGNN` optimized independently for every window. Defaults to `dip`. |
 | `normalize` | `bool` | Enables dataset normalization when true. |
 | `add_meteo` | `bool` | Adds meteorological input channels. |
 | `add_time_channels` | `bool` | Adds time-derived channels. |
@@ -51,9 +68,18 @@ Runtime values such as `date`, `validation_sensors`, and `test_sensors` are inje
 | `model.preserve_time` | `bool` | Controls whether the model preserves the time axis. |
 | `model.learned_upsampling` | `bool` | Enables learned upsampling. |
 | `model.skip_connections` | `bool`, autoencoder only | Enables autoencoder skip connections. |
+| `graph_dip.nearest_sensors` | `int` | Number of geometrically nearest TRAIN sensors connected to each grid cell. Defaults to `4`. |
+| `graph_dip.hidden_channels` | `int` | Width of the temporal and graph representations. Must be divisible by `attention_heads`. Defaults to `32`. |
+| `graph_dip.attention_heads` | `int` | GAT attention heads. Defaults to `4`. |
+| `graph_dip.local_refinement_layers` | `int` | Local grid-attention layers after sensor-to-grid propagation. Defaults to `1`. |
+| `graph_dip.patience` | `int` | Early-stopping patience measured on visible validation sensors. Defaults to `50`. |
+| `graph_dip.weight_decay` | `float` | Adam weight decay used during per-window optimization. Defaults to `1e-5`. |
+| `graph_dip.spatial_smoothness` | `float` | Weight of the local edge smoothness penalty. Defaults to `1e-4`. |
 | `spread_test_groups.*` | object | Controls held-out sensor group generation. |
 | `random_time_windows.*` | object, optional | Generates sampled windows for a year. |
 | `all_time_windows.*` | object, optional | Generates all windows for selected start hours. |
+
+Graph DIP predicts the final hour from the configured temporal window. TRAIN sensors are its only sensor-to-grid message sources and loss targets; validation sensors select the stopping point, and TEST sensors remain outside its graph, loss, and model selection. Use a new session folder because its `DIP_*` columns refer to Graph DIP rather than CNN DIP when `surface_optimizer: graph_dip`.
 
 ## `data.npz`
 

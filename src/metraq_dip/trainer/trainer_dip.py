@@ -70,6 +70,7 @@ class DipTrainer:
             start_date=self.start_date,
             end_date=self.end_date,
             add_meteo=self.config.get('add_meteo'),
+            meteo_observed_only=bool(self.config.get('meteo_observed_only')),
             add_time_channels=self.config.get('add_time_channels'),
             add_coordinates=self.config.get('add_coordinates'),
             add_traffic_data=self.config.get('add_traffic_data'),

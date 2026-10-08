@@ -644,6 +644,8 @@ def main(
         zoom=zoom,
     )
 
+    fig.update_layout(showlegend=False)
+
     html_config = {"scrollZoom": False, "displayModeBar": False} if fixed_view else None
     return [
         path.resolve()
