@@ -1,6 +1,7 @@
 """Responsive native SVG grid over georeferenced OpenStreetMap tiles."""
 from html import escape
 import math
+import numpy as np
 
 from pyproj import Transformer
 from shapely.ops import unary_union
@@ -18,7 +19,7 @@ def color_for(value, low, high):
     return '#%02x%02x%02x' % tuple(rgb)
 
 
-def build_map(ctx, cells, observations, unit, bounds=None, show_sensors=True):
+def build_map(ctx, cells, observations, unit, bounds=None, show_sensors=True, *, surface=None, method="Observaciones"):
     """Return an SVG with exact projected geometry; no camera or panning needed."""
     project = Transformer.from_crs(ctx['metric_crs'], 'EPSG:3857', always_xy=True)
 
@@ -36,7 +37,8 @@ def build_map(ctx, cells, observations, unit, bounds=None, show_sensors=True):
     side = max(right - left, bottom - top) * 1.02
     origin_x, origin_y = (left + right - side) / 2, (top + bottom - side) / 2
     if bounds is None:
-        low, high = (float(cells.value.min()), float(cells.value.max())) if not cells.empty else (0.0, 1.0)
+        finite = surface[np.isfinite(surface)] if surface is not None else cells.value.to_numpy()
+        low, high = (float(finite.min()), float(finite.max())) if len(finite) else (0.0, 1.0)
     else:
         low, high = map(float, bounds)
     if high <= low:
@@ -63,10 +65,16 @@ def build_map(ctx, cells, observations, unit, bounds=None, show_sensors=True):
     for row in range(ctx['grid'].shape[0]):
         for col in range(ctx['grid'].shape[1]):
             cell = values.get((row, col))
-            fill = 'none' if cell is None else color_for(float(cell.value), low, high)
-            title = 'Sin medidas' if cell is None else (
-                f'Media: {cell.value:.2f} {unit}\nSensores: {cell.count}\n' + cell.stations.replace('<br>', '\n'))
+            value = float(surface[row, col]) if surface is not None else (float(cell.value) if cell is not None else float('nan'))
+            fill = color_for(value, low, high) if np.isfinite(value) else 'none'
+            if cell is not None:
+                title = f'Media: {cell.value:.2f} {unit} (observada)\nSensores: {cell.count}\n' + cell.stations.replace('<br>', '\n')
+            elif np.isfinite(value):
+                title = f'Estimación {method}: {value:.2f} {unit}'
+            else:
+                title = 'Sin medidas ni estimación'
             pieces.append(f'<polygon class="metraq-cell" data-cell="{row}:{col}" '
+                          f'data-kind="{"observed" if cell is not None else "estimated" if np.isfinite(value) else "missing"}" '
                           f'points="{coordinates(points(ctx["grid"][row, col]))}" fill="{fill}" '
                           f'fill-opacity="0.72" stroke="#59636b" stroke-opacity="0.65" '
                           f'stroke-width="0.65" vector-effect="non-scaling-stroke" tabindex="0">'
@@ -76,9 +84,8 @@ def build_map(ctx, cells, observations, unit, bounds=None, show_sensors=True):
             x, y = project.transform(station.utm_x, station.utm_y)
             pieces.append(f'<circle cx="{x:.3f}" cy="{-y:.3f}" r="{side * 0.004:.3f}" fill="#202020">'
                           f'<title>{escape(station.detail)} {escape(unit)}</title></circle>')
-    stops = ','.join(f'rgb({r},{g},{b})' for r, g, b in PALETTE)
     pieces.append(f'''</svg>
-        <div class="metraq-scale"><span>{low:g}</span><div style="background:linear-gradient(to right,{stops})"></div>
+        <div class="metraq-scale"><span>{low:g}</span><div class="metraq-gradient"></div>
         <span>{high:g} {escape(unit)}</span></div>
         <div class="metraq-attribution">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a></div>
         </div>''')

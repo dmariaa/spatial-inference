@@ -47,31 +47,77 @@ def test_empty_hour_keeps_grid_without_colored_cells():
     assert 'Sin medidas' in markup
 
 
-def test_interface_changes_hour_and_pollutant(monkeypatch):
+
+def test_api_changes_hour_pollutant_and_serves_separate_assets(monkeypatch):
     import pytest
-    pytest.importorskip("streamlit")
-    from streamlit.testing.v1 import AppTest
-    from metraq_app import data_source
-    sensors = pd.DataFrame({"id": [1], "name": ["A"], "utm_x": [440100.],
-        "utm_y": [4470100.], "latitude": [40.38], "longitude": [-3.70]})
-    monkeypatch.setattr(data_source, "load_catalog", lambda source: pd.DataFrame({
-        "magnitude_id": [8, 12], "first_date": pd.to_datetime(["2024-01-01"] * 2),
-        "last_date": pd.to_datetime(["2024-01-02 23:00"] * 2), "low": [0., 0.], "high": [100., 100.]}))
-    monkeypatch.setattr(data_source, "load_sensors", lambda source, magnitudes: sensors)
-    monkeypatch.setattr(data_source, "load_measurements", lambda source, magnitude, timestamp:
-        pd.DataFrame({"sensor_id": [1], "value": [float(timestamp.hour)]}))
-    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "src/metraq_app/app.py").run(timeout=30)
-    assert not app.exception
-    assert not app.error
-    assert app.metric[0].value == "1"
-    app.button[1].click().run()
-    assert not app.exception
-    assert "01:00" in app.subheader[0].value
-    app.selectbox[1].set_value(8).run()
-    assert not app.exception
-    assert "NO₂" in app.subheader[0].value
-    app.selectbox[2].set_value(None).run()
-    assert not app.exception
-    assert app.info
+    pytest.importorskip('fastapi')
+    pytest.importorskip('httpx')
+    from fastapi.testclient import TestClient
+    from metraq_app import app as backend
+    sensors = pd.DataFrame({'id': [1], 'name': ['A'], 'utm_x': [440100.],
+        'utm_y': [4470100.], 'latitude': [40.38], 'longitude': [-3.70]})
+    monkeypatch.setattr(backend, 'load_catalog', lambda source: pd.DataFrame({
+        'magnitude_id': [8, 12], 'first_date': pd.to_datetime(['2024-01-01'] * 2),
+        'last_date': pd.to_datetime(['2024-01-02 23:00'] * 2), 'low': [0., 0.], 'high': [100., 100.]}))
+    monkeypatch.setattr(backend, 'load_sensors', lambda source, magnitudes: sensors)
+    calls = []
+    def measurements(source, magnitude, timestamp):
+        calls.append(timestamp)
+        return pd.DataFrame({'sensor_id': [1], 'value': [float(timestamp.hour)]})
+    monkeypatch.setattr(backend, 'load_measurements', measurements)
+    backend.clear_cache()
+    client = TestClient(backend.app)
+    try:
+        html = client.get('/').text
+        assert '/static/styles.css' in html and '/static/app.js' in html
+        assert '<style' not in html and 'style=' not in html
+        assert client.get('/static/styles.css').status_code == 200
+        assert client.get('/static/app.js').status_code == 200
+        catalog = client.get('/api/catalog?source=files').json()
+        assert [item['id'] for item in catalog['pollutants']] == [8, 12]
+        params = {'source': 'files', 'magnitude': 12, 'timestamp': '2024-01-01T00:00:00'}
+        initial = client.get('/api/view', params=params)
+        assert initial.status_code == 200
+        assert initial.json()['stations'][0]['value'] == 0
+        assert initial.json()['cell_count'] == 1
+        assert f'data-cell="{initial.json()["stations"][0]["cell_id"]}"' in initial.json()['map']
+        assert 'style=' not in initial.json()['map'] and '<script' not in initial.json()['map']
+        client.get('/api/view', params=params)
+        assert len(calls) == 1
+        interpolated = client.get('/api/view', params={**params, 'method': 'idw'}).json()
+        assert interpolated['method'] == 'IDW'
+        assert interpolated['interpolated_count'] > 0
+        assert interpolated['stations'][0]['value'] == 0
+        assert client.get('/api/view', params={**params, 'method': 'unknown'}).status_code == 422
+        params.update(magnitude=8, timestamp='2024-01-01T01:00:00')
+        following = client.get('/api/view', params=params).json()
+        assert following['name'] == 'NO₂' and following['mean'] == 1
+        assert set(following['stations'][0]) == {'id', 'name', 'value', 'cell_id'}
+        assert client.post('/api/refresh').status_code == 200
+        client.get('/api/view', params=params)
+        assert len(calls) == 3
+        assert client.get('/api/catalog?source=invalid').status_code == 422
+        params['timestamp'] = '2024-01-01T01:15:00'
+        assert client.get('/api/view', params=params).status_code == 422
+        params['timestamp'] = '2025-01-01T00:00:00'
+        assert client.get('/api/view', params=params).status_code == 422
+    finally:
+        backend.clear_cache()
 
 
+def test_api_failure_does_not_expose_backend_details(monkeypatch):
+    import pytest
+    pytest.importorskip('fastapi')
+    pytest.importorskip('httpx')
+    from fastapi.testclient import TestClient
+    from metraq_app import app as backend
+    def fail(source):
+        raise RuntimeError('private connection details')
+    monkeypatch.setattr(backend, 'load_catalog', fail)
+    backend.clear_cache()
+    try:
+        response = TestClient(backend.app).get('/api/catalog?source=db')
+        assert response.status_code == 503
+        assert 'private connection details' not in response.text
+    finally:
+        backend.clear_cache()

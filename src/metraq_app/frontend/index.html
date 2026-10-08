@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>METRAQ · Madrid</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <div><p class="eyebrow">METRAQ · OBSERVACIONES</p><h1>Calidad del aire en Madrid</h1></div>
+      <button id="refresh" type="button">Actualizar datos</button>
+    </header>
+    <form id="controls" class="controls" aria-label="Selección de observaciones">
+      <label>Origen<select id="source"><option value="files">Dataset METRAQ (CSV)</option><option value="db">Base de datos</option></select></label>
+      <label>Contaminante<select id="pollutant" required></select></label>
+      <label>Método<select id="method"><option value="observed">Solo observaciones</option><option value="dip-cnn">DIP-CNN</option><option value="krg">KRG</option><option value="idw">IDW</option></select></label>
+      <label id="dip-options" hidden>Iteraciones DIP<select id="dip-epochs"><option value="100">100</option><option value="250" selected>250</option><option value="500">500</option></select></label>
+      <label>Fecha<input id="date" type="date" required></label>
+      <label>Hora<select id="hour" required></select></label>
+      <div class="hour-buttons"><button id="previous" type="button" aria-label="Hora anterior">← 1 h</button><button id="next" type="button" aria-label="Hora siguiente">1 h →</button></div>
+      <label>Celda<select id="cell-size"><option value="1000">1000 m</option><option value="500">500 m</option><option value="2000">2000 m</option></select></label>
+      <label class="toggle"><input id="fixed-scale" type="checkbox">Escala fija</label>
+      <label class="toggle"><input id="show-sensors" type="checkbox" checked>Mostrar sensores</label>
+    </form>
+    <p id="coverage" class="coverage"></p>
+    <p id="status" class="status" role="status" aria-live="polite">Cargando datos…</p>
+    <section id="results" hidden>
+      <div class="summary"><h2 id="selection"></h2><div class="metrics">
+        <span>Sensores <strong id="sensor-count">—</strong></span><span>Celdas <strong id="cell-count">—</strong></span><span>Media <strong id="mean">—</strong></span>
+      </div></div>
+      <div class="workspace">
+        <section class="map-panel" aria-label="Mapa de observaciones"><div id="map" class="map-host"></div><p id="map-note" class="map-note">Color: media por celda. Sin relleno: sin medidas. Pasa el cursor por una celda para ver sus valores.</p></section>
+        <section class="stations-panel"><div class="panel-heading"><h2>Medidas por estación</h2><button id="download" type="button">CSV ↓</button></div>
+          <div class="table-scroll"><table><thead><tr><th scope="col">Estación</th><th scope="col" id="value-heading">Valor</th><th scope="col">ID</th></tr></thead><tbody id="stations"></tbody></table></div>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
