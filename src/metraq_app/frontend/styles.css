@@ -1,0 +1,460 @@
+:root {
+    color-scheme: light;
+    --ink: #17272d;
+    --muted: #61747b;
+    --line: #dce5e8;
+    --accent: #176c69;
+    --surface: #fff;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    background: #f3f6f7;
+    color: var(--ink)
+}
+
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0
+}
+
+button, input, select {
+    font: inherit
+}
+
+button, input, select {
+    border: 1px solid #c8d6db;
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ink);
+    min-height: 34px;
+    padding: 6px 10px
+}
+
+button {
+    cursor: pointer
+}
+
+button:hover {
+    border-color: var(--accent);
+    background: #eaf4f3
+}
+
+button:disabled {
+    cursor: default;
+    opacity: .45
+}
+
+input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px
+}
+
+[hidden] {
+    display: none !important
+}
+
+.app-shell {
+    max-width: 1200px;
+    margin: auto;
+    padding: 16px;
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px
+}
+
+.eyebrow {
+    font-size: 10px;
+    letter-spacing: .16em;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 4px
+}
+
+h1 {
+    font-size: clamp(18px, 2.3vw, 26px);
+    margin: 0;
+    font-weight: 650
+}
+
+h2 {
+    font-size: 16px;
+    margin: 0;
+    font-weight: 650
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px
+}
+
+.controls > label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--muted)
+}
+
+.controls select, .controls input {
+    font-size: 13px
+}
+
+.controls .toggle {
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    min-height: 34px;
+    font-size: 12px;
+    color: var(--ink)
+}
+
+.toggle input {
+    min-height: 0;
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px
+}
+
+.hour-buttons {
+    display: flex;
+    gap: 4px
+}
+
+.hour-buttons button {
+    padding-inline: 7px
+}
+
+.coverage {
+    font-size: 11px;
+    color: var(--muted);
+    margin: 6px 2px
+}
+
+.status {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 8px 2px
+}
+
+.status.error {
+    color: #a63131
+}
+
+.summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 0 12px
+}
+
+.metrics {
+    display: flex;
+    gap: 18px;
+    font-size: 12px;
+    color: var(--muted)
+}
+
+.metrics strong {
+    color: var(--ink);
+    font-size: 15px;
+    margin-left: 4px;
+    white-space: nowrap
+}
+
+.workspace {
+    display: grid;
+    grid-template-columns:minmax(0, 3fr) minmax(230px, 2fr);
+    gap: 22px;
+    align-items: start
+}
+
+.map-panel {
+    min-width: 0
+}
+
+.map-host {
+    position: relative;
+    width: 100%;
+    container-type: inline-size
+}
+
+.metraq-native-map {
+    width: 100%;
+    display: grid;
+    justify-items: center
+}
+
+.metraq-native-map svg {
+    display: block;
+    width: min(100%, var(--map-side, 100%));
+    height: auto;
+    aspect-ratio: 1;
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 3px
+}
+
+.metraq-cell:hover, .metraq-cell:focus, .metraq-cell.is-selected, .metraq-cell.is-hovered {
+    stroke: #111;
+    stroke-width: 2;
+    outline: none
+}
+
+.metraq-scale {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 11px;
+    width: 100%;
+    max-width: var(--map-side, 100%)
+}
+
+.metraq-gradient {
+    flex: 1;
+    height: 10px;
+    border-radius: 3px;
+    background: linear-gradient(to right, #440154, #3b528b, #21918c, #5ec962, #fde725)
+}
+
+.metraq-attribution {
+    font-size: 10px;
+    text-align: right;
+    margin-top: 4px;
+    width: 100%;
+    max-width: var(--map-side, 100%);
+    color: var(--muted)
+}
+
+a {
+    color: inherit
+}
+
+.map-note {
+    font-size: 11px;
+    color: var(--muted);
+    margin: 8px 0 0;
+    line-height: 1.5
+}
+
+.stations-panel {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden
+}
+
+.panel-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    gap: 6px
+}
+
+.panel-heading h2 {
+    font-size: 14px
+}
+
+.panel-heading button {
+    font-size: 12px;
+    min-height: 30px
+}
+
+.table-scroll {
+    overflow: auto;
+    height: var(--table-height, calc(100dvh - 300px));
+    min-height: 140px
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px
+}
+
+th {
+    position: sticky;
+    top: 0;
+    background: #f0f5f6;
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600
+}
+
+th, td {
+    padding: 9px 12px;
+    text-align: left;
+    border-bottom: 1px solid #edf1f2
+}
+
+th:nth-child(2), td:nth-child(2) {
+    text-align: right;
+    white-space: nowrap
+}
+
+th:nth-child(3), td:nth-child(3) {
+    color: var(--muted);
+    font-size: 11px
+}
+
+tbody tr:hover {
+    background: #f0f7f7
+}
+
+.metraq-cell {
+    stroke: #ffffff;
+    stroke-opacity: 0.5;
+    stroke-width: 0.8;
+}
+.metraq-cell:hover,
+.metraq-cell.is-hovered {
+    stroke: #dbd6c3;
+    stroke-width: 3;
+    stroke-opacity: 1;
+}
+.metraq-cell.is-selected {
+    stroke: #ffaa00;
+    stroke-width: 2;
+    stroke-opacity: 1;
+}
+
+@media (min-width: 1050px) {
+    .workspace {
+        grid-template-columns:minmax(0, min(65%, calc(100dvh - 270px))) minmax(280px, 1fr)
+    }
+}
+
+@media (max-width: 700px) {
+    .app-shell {
+        padding: 12px
+    }
+
+    .app-header {
+        margin-bottom: 10px
+    }
+
+    .controls {
+        gap: 8px;
+        padding: 9px
+    }
+
+    .controls > label {
+        flex: 1 1 100px
+    }
+
+    .controls .toggle {
+        flex: 1 1 130px
+    }
+
+    .summary {
+        align-items: start;
+        flex-direction: column;
+        gap: 6px
+    }
+
+    .metrics {
+        gap: 14px
+    }
+
+    .workspace {
+        grid-template-columns:minmax(0, 3fr) minmax(0, 2fr);
+        gap: 12px
+    }
+
+    .metraq-native-map svg {
+        width: min(100%, var(--map-side, 100%))
+    }
+
+    .metraq-scale, .metraq-attribution {
+        max-width: var(--map-side, 100%)
+    }
+
+    .table-scroll {
+        height: var(--table-height, calc(100dvh - 355px))
+    }
+
+    th, td {
+        padding: 8px 7px
+    }
+
+    .panel-heading {
+        padding: 8px
+    }
+
+    .panel-heading h2 {
+        font-size: 12px
+    }
+
+    th:nth-child(3), td:nth-child(3) {
+        display: none
+    }
+}
+
+@media (max-width: 390px) {
+    .workspace {
+        grid-template-columns:1fr
+    }
+
+    .table-scroll {
+        height: 220px
+    }
+}
+
+.cell-details {
+    pointer-events: none;
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    max-width: min(280px, calc(100% - 16px));
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 12px;
+    background: white;
+    color: #202020;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px #0002;
+    font-size: 12px;
+    white-space: pre-line;
+    z-index: 1
+}
+
+.cell-details button {
+    padding: 0 4px;
+    min-width: 24px;
+    flex-shrink: 0
+}
+
+.cell-details.is-pinned {
+    pointer-events: auto
+}
+
+#stations tr {
+    cursor: pointer
+}
+
+#stations tr.is-selected {
+    background: #dcefed;
+    box-shadow: inset 3px 0 #217b73
+}
+
+#stations tr:focus-visible {
+    outline: 2px solid #217b73;
+    outline-offset: -2px
+}

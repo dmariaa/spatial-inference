@@ -5,6 +5,7 @@ This site contains the internal experiment documentation for `spatial-inference`
 ## Included Pages
 
 - **Experiments**: entry point for experiment result blocks and artifact schema.
+- **[Execution Flow](execution_flow.md)**: function-call diagrams for DIP, GP, KRG, IDW, evaluation and persistence.
 - **METRAQ NO**: paper-ready NO summary tables, window diagnostics, and exemplary window visualizations.
 - **Cross-Dataset UNet**: UNet NO2/NOX comparisons for AIRPARIF and METRAQ.
 - **Cross-Dataset Autoencoder**: autoencoder NO2/NOX comparisons for AIRPARIF and METRAQ.

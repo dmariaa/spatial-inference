@@ -8,10 +8,13 @@ theme:
   name: mkdocs
 extra_css:
   - stylesheets/extra.css
+extra_javascript:
+  - javascripts/mermaid.js
 nav:
   - Home: index.md
   - Experiments:
       - Overview: experiment_sets.md
+      - Execution Flow: execution_flow.md
       - Artifacts Schema: experiments.md
       - METRAQ NO:
           - Overview: experiments_NO/index.md

@@ -10,10 +10,13 @@ from metraq_dip.tools.grid import map_sensor_ids_to_grid
 
 def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     """
-    TODO: This code is almost duplicated in data.py, just refactor
-    Receives data in shape (channels, timestamps, sensors) and returns the same data in
-    shape (channels, timestamps, rows, cols) where rows, cols are the coordinates of the sensor in the grid.
-    Cells with no sensors have 0 value in all channels.
+    Aggregate traffic observations from sensors into grid cells.
+
+    ``data`` must contain a value channel followed by its availability mask, with
+    shape ``(2, timestamps, sensors)``. When several sensors fall in the same
+    cell, their available values are averaged. The output mask is true whenever
+    at least one sensor contributed to the cell. Cells without observations keep
+    value 0 and mask 0.
 
     The sensor_ids parameter must contain the list of sensors that matches the sensors dimension of the data.
 
@@ -24,7 +27,9 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
     """
     grid = grid_ctx.get("grid")
     h, w = grid.shape
-    m, t, s = data.shape
+    if data.ndim != 3 or data.shape[0] != 2:
+        raise ValueError("traffic data must have shape (2, timestamps, sensors)")
+    _, t, s = data.shape
 
     df_sensors = pd.read_sql_query(text("SELECT id, utm_x, utm_y FROM traffic_sensors"), con=metraq_db.connection)
 
@@ -42,11 +47,33 @@ def to_grid(*, data: np.ndarray, sensor_ids: list, grid_ctx: dict):
         warn_prefix="Traffic to_grid",
     )
 
-    X_new = np.zeros((m, t, h, w), dtype=np.float32)
-    if mapped.any():
-        X_new[:, :, rows[mapped], cols[mapped]] = data[:, :, mapped]
+    values = np.asarray(data[0], dtype=np.float32)
+    availability = np.asarray(data[1], dtype=bool)
+    value_grid = np.zeros((t, h * w), dtype=np.float32)
+    count_grid = np.zeros((t, h * w), dtype=np.int32)
 
-    return X_new
+    if mapped.any():
+        mapped_cells = rows[mapped] * w + cols[mapped]
+        mapped_values = values[:, mapped]
+        mapped_availability = availability[:, mapped] & np.isfinite(mapped_values)
+
+        for time_idx in range(t):
+            valid = mapped_availability[time_idx]
+            if not valid.any():
+                continue
+            cells = mapped_cells[valid]
+            np.add.at(value_grid[time_idx], cells, mapped_values[time_idx, valid])
+            np.add.at(count_grid[time_idx], cells, 1)
+
+    observed = count_grid > 0
+    value_grid[observed] /= count_grid[observed]
+    return np.stack(
+        [
+            value_grid.reshape(t, h, w),
+            observed.reshape(t, h, w).astype(np.float32),
+        ],
+        axis=0,
+    )
 
 
 def get_traffic_data(*, start_date: datetime,
@@ -58,7 +85,7 @@ def get_traffic_data(*, start_date: datetime,
     data_query = f"""SELECT
                         tr.sensor_id,
                         DATE_FORMAT(tr.entry_date, '%Y-%m-%d %H:00:00') AS hour,
-                        SUM(tr.traffic_intensity) / 4.0 AS traffic_intensity,
+                        AVG(tr.traffic_intensity)       AS traffic_intensity,
                         AVG(tr.avg_speed)          AS avg_speed,
                         AVG(tr.sensor_occupancy)   AS sensor_occupancy
                     FROM traffic_data tr

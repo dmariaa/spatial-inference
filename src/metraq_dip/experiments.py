@@ -95,12 +95,18 @@ def _ensure_base_files(
         df["processed"] = False
         df["DIP_L1Loss"] = 0.0
         df["DIP_MSELoss"] = 0.0
+        df["GP_L1Loss"] = 0.0
+        df["GP_MSELoss"] = 0.0
         df["KRG_L1Loss"] = 0.0
         df["KRG_MSELoss"] = 0.0
         df["IDW_L1Loss"] = 0.0
         df["IDW_MSELoss"] = 0.0
 
     schema_updated = ensure_results_stat_columns(df)
+    for column in ("GP_L1Loss", "GP_MSELoss"):
+        if column not in df.columns:
+            df[column] = np.nan
+            schema_updated = True
     backfilled = backfill_results_stat_columns(
         df=df,
         experiment_folder=experiment_output_folder,
@@ -152,6 +158,20 @@ def _compute_masked_losses(
     l1_loss = float(np.abs(diff).sum() / count)
     mse_loss = float(np.square(diff).sum() / count)
     return l1_loss, mse_loss
+
+
+def _get_method_losses(results: list[dict[str, Any]]) -> dict[str, float]:
+    name_map = {
+        "SpatioTemporalGPInterpolator": "GP",
+        "KrigingInterpolator": "KRG",
+        "IdwInterpolator": "IDW",
+    }
+    losses: dict[str, float] = {}
+    for result in results:
+        method = name_map[result["model"]]
+        criterion = result["criterion"].removesuffix("Loss")
+        losses[f"{method}_{criterion}Loss"] = float(result["loss"])
+    return losses
 
 
 def _build_loss_history_cube(
@@ -360,6 +380,59 @@ def _run_single_experiment(
         )
     surface_real = np.asarray(optimizer.optimize(), dtype=np.float32)
     optimizer_artifacts = optimizer.get_artifacts()
+    first_member = optimizer_artifacts["member_artifacts"][0]
+    interpolation_train_data = np.asarray(first_member["train_data"], dtype=np.float32)
+    interpolation_val_data = np.asarray(first_member["val_data"], dtype=np.float32)
+    interpolation_train_mask = np.asarray(first_member["train_mask"], dtype=bool)
+    interpolation_val_mask = np.asarray(first_member["val_mask"], dtype=bool)
+    interpolation_mask = interpolation_train_mask | interpolation_val_mask
+    interpolation_data = np.where(
+        interpolation_train_mask,
+        interpolation_train_data,
+        interpolation_val_data,
+    )
+    pollutants = list(config["pollutants"])
+    normalization_stats = optimizer_artifacts.get("normalization_stats")
+    test_data_last = np.asarray(static_data["test_data"][:, -1:, ...], dtype=np.float32)
+    test_mask = np.broadcast_to(
+        np.asarray(static_data["test_mask"], dtype=bool), test_data_last.shape
+    )
+
+    if bool(config.get("normalize")):
+        if normalization_stats is None:
+            raise ValueError("normalization_stats are required when normalize=True.")
+        x_data = _denormalize_masked_channels(
+            interpolation_data,
+            interpolation_mask,
+            pollutants=pollutants,
+            normalization_stats=normalization_stats,
+        )
+        y_data = _denormalize_masked_channels(
+            test_data_last,
+            test_mask,
+            pollutants=pollutants,
+            normalization_stats=normalization_stats,
+        )
+    else:
+        x_data = interpolation_data
+        y_data = test_data_last
+
+    test_target = y_data[:, -1, ...]
+    test_mask_last = test_mask[:, 0, ...]
+    dip_l1_loss, dip_mse_loss = _compute_masked_losses(test_target, surface_real, test_mask_last)
+
+    interpolation_results = get_interpolation_loss(
+        x_data,
+        interpolation_mask,
+        y_data,
+        test_mask,
+        pollutants,
+        include_gp=True,
+    )
+    method_losses = _get_method_losses(interpolation_results)
+
+    # Serialization and diagnostics consume the results; prediction does not
+    # depend on the compact representation written to the experiment file.
     experiment_data = _build_experiment_artifacts(
         static_data=static_data,
         optimizer_artifacts=optimizer_artifacts,
@@ -370,50 +443,6 @@ def _run_single_experiment(
         train_mask=experiment_data["train_mask"],
         val_mask=experiment_data["val_mask"],
     )
-
-    pollutants = list(config["pollutants"])
-    normalization_stats = optimizer_artifacts.get("normalization_stats")
-    train_data_first = np.asarray(experiment_data["train_data"][0], dtype=np.float32)
-    val_data_first = np.asarray(experiment_data["val_data"][0], dtype=np.float32)
-    test_data_first = np.asarray(experiment_data["test_data"][0], dtype=np.float32)
-    train_mask_first = np.asarray(experiment_data["train_mask"][0], dtype=bool)
-    val_mask_first = np.asarray(experiment_data["val_mask"][0], dtype=bool)
-    test_mask_first = np.asarray(experiment_data["test_mask"][0], dtype=bool)
-
-    observed_mask = train_mask_first | val_mask_first
-    observed_data = np.where(train_mask_first, train_data_first, val_data_first)
-
-    if bool(config.get("normalize")):
-        if normalization_stats is None:
-            raise ValueError("normalization_stats are required when normalize=True.")
-        x_data = _denormalize_masked_channels(
-            observed_data,
-            observed_mask,
-            pollutants=pollutants,
-            normalization_stats=normalization_stats,
-        )
-        y_data = _denormalize_masked_channels(
-            test_data_first,
-            test_mask_first,
-            pollutants=pollutants,
-            normalization_stats=normalization_stats,
-        )
-    else:
-        x_data = observed_data
-        y_data = test_data_first
-
-    test_target = y_data[:, -1, ...]
-    test_mask_last = np.asarray(test_mask_first[:, 0, ...], dtype=bool)
-    dip_l1_loss, dip_mse_loss = _compute_masked_losses(test_target, surface_real, test_mask_last)
-
-    interpolation_results = get_interpolation_loss(
-        x_data,
-        observed_mask,
-        y_data,
-        test_mask_first,
-        pollutants,
-    )
-
     experiment_file_name = f"{get_experiment_name(sensor_group_key, time_window_dt)}.npz"
     np.savez_compressed(os.path.join(experiment_output_folder, experiment_file_name), **experiment_data)
 
@@ -422,10 +451,7 @@ def _run_single_experiment(
         "time_window": pd.Timestamp(time_window_iso),
         "DIP_L1Loss": dip_l1_loss,
         "DIP_MSELoss": dip_mse_loss,
-        "KRG_L1Loss": interpolation_results[0]["loss"],
-        "KRG_MSELoss": interpolation_results[1]["loss"],
-        "IDW_L1Loss": interpolation_results[2]["loss"],
-        "IDW_MSELoss": interpolation_results[3]["loss"],
+        **method_losses,
         "processed": True,
         **data_stats,
     }
@@ -440,6 +466,8 @@ def _apply_row_result(df: pd.DataFrame, row_result: dict[str, Any]) -> None:
             "processed",
             "DIP_L1Loss",
             "DIP_MSELoss",
+            "GP_L1Loss",
+            "GP_MSELoss",
             "KRG_L1Loss",
             "KRG_MSELoss",
             "IDW_L1Loss",
@@ -451,6 +479,8 @@ def _apply_row_result(df: pd.DataFrame, row_result: dict[str, Any]) -> None:
         row_result["processed"],
         row_result["DIP_L1Loss"],
         row_result["DIP_MSELoss"],
+        row_result["GP_L1Loss"],
+        row_result["GP_MSELoss"],
         row_result["KRG_L1Loss"],
         row_result["KRG_MSELoss"],
         row_result["IDW_L1Loss"],
