@@ -98,11 +98,19 @@ def generate_meteo_magnitudes(*, start_date: datetime,
                               end_date: datetime,
                               grid_ctx: dict,
                               sensor_ids: list[int],
-                              aq_backend: AQBackend) -> tuple[ndarray, DatetimeIndex, list]:
+                              aq_backend: AQBackend,
+                              normalize: bool = False,
+                              observed_only: bool = False) -> tuple[ndarray, DatetimeIndex, list]:
+    """Build meteo value/mask channels, optionally standardizing each variable.
+
+    Statistics use available finite values across the requested sensors and
+    window, after conversion of wind to u/v. Masks are never standardized.
+    """
     from metraq_dip.data import data as data_module
 
     wind_magnitudes = [81, 82]
     meteo_magnitudes = [83, 86, 87, 88, 89]
+    provenance_options = {"observed_only": True} if observed_only else {}
 
     values, masks, time_index, _, _ = data_module.get_magnitudes_data(
         start_date=start_date,
@@ -111,10 +119,11 @@ def generate_meteo_magnitudes(*, start_date: datetime,
         sensor_ids=sensor_ids,
         normalize=False,
         aq_backend=aq_backend,
+        **provenance_options,
     )
 
     # transform wind speed + direction to u, v vector
-    df, _ = data_module.get_data(start_date=start_date, end_date=end_date, magnitudes=wind_magnitudes, aq_backend=aq_backend)
+    df, _ = data_module.get_data(start_date=start_date, end_date=end_date, magnitudes=wind_magnitudes, aq_backend=aq_backend, **provenance_options)
     df_wind = df[df['magnitude_id'].isin(wind_magnitudes)]
     df_wide = df_wind.pivot_table(
         index=["sensor_id", "entry_date"],
@@ -122,6 +131,7 @@ def generate_meteo_magnitudes(*, start_date: datetime,
         values="value",
         aggfunc="mean",
     )
+    df_wide = df_wide.reindex(columns=wind_magnitudes)
     wind_valid = ((~df_wide[81].isna()) & (~df_wide[82].isna()))
     wind_mask = wind_valid.astype("float32")
     rad = np.deg2rad(df_wide[82])
@@ -144,6 +154,20 @@ def generate_meteo_magnitudes(*, start_date: datetime,
     for mag_id in meteo_mags:
         v = values[mag_id]
         m = masks[mag_id]
+        if normalize or observed_only:
+            valid = np.isfinite(v) & np.isfinite(m) & (m > 0)
+            m = valid.astype(np.float32)
+            standardized = np.zeros_like(v, dtype=np.float32)
+            if valid.any():
+                observed = v[valid].astype(np.float64)
+                if normalize:
+                    std = observed.std()
+                    if std < 1e-6:
+                        std = 1.0
+                    standardized[valid] = (observed - observed.mean()) / std
+                else:
+                    standardized[valid] = observed
+            v = standardized
         chans.append(v[None, ...])
         chans.append(m[None, ...])
 

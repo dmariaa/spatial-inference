@@ -21,8 +21,10 @@ dependencies = [
     "sqlalchemy>=2.0.46",
     "statsmodels>=0.14.6",
     "torch>=2.8.0",
+    "torch-geometric>=2.8,<3",
     "torchvision>=0.23.0",
     "tqdm>=4.67.3",
+    "wandb>=0.22,<1",
 ]
 
 [dependency-groups]

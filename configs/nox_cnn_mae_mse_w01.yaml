@@ -1,0 +1,51 @@
+add_coordinates: false
+add_distance_to_sensors: false
+add_meteo: false
+add_time_channels: false
+add_traffic_data: false
+normalize: true
+pollutants:
+- 12
+ensemble_size: 5
+k_best_n: 3
+epochs: 250
+hours: 24
+lr: 0.01
+optimization_loss: mae_mse
+model:
+  kernel_size:
+  - 3
+  - 5
+  - 5
+  base_channels: 16
+  levels: 3
+  learned_upsampling: false
+  preserve_time: false
+  architecture: unet
+aq_dataset: metraq
+aq_backend: files
+spread_test_groups:
+  n_groups: 10
+  group_size: 4
+  max_uses_per_sensor: 2
+random_time_windows:
+  year: 2024
+  windows_per_month: 20
+  start_hours:
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  weekend_fraction: 0.4
+optimization_mse_weight: 0.1

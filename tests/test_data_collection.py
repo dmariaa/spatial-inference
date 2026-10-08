@@ -2,8 +2,60 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from metraq_dip.data import data as data_module
+
+
+@pytest.mark.parametrize("normalize", [False, True])
+@pytest.mark.parametrize("no_original_wind", [False, True])
+def test_observed_only_meteo_filters_before_normalization(monkeypatch, normalize, no_original_wind):
+    times = pd.date_range("2024-01-01", periods=2, freq="h")
+    records = []
+    for mag in [81, 82, 83, 86, 87, 88, 89, 12]:
+        for hour, timestamp in enumerate(times):
+            for sensor in [10, 20]:
+                interpolated = sensor == 20 or mag == 87 or (mag == 82 and hour == 1)
+                if no_original_wind and mag in [81, 82]:
+                    interpolated = True
+                value = 10000.0 if interpolated else (90.0 if mag == 82 else 1.0 + 2 * hour)
+                records.append((sensor, timestamp, mag, value, interpolated))
+    frame = pd.DataFrame(records, columns=["sensor_id", "entry_date", "magnitude_id", "value", "is_interpolated"])
+
+    class Backend:
+        def get_measurements(self, *, start_date, end_date, magnitudes):
+            return frame[frame.magnitude_id.isin(magnitudes)].copy()
+
+    backend = Backend()
+    monkeypatch.setattr(data_module, "to_grid", _fake_to_grid)
+    grid, _, _ = data_module.generate_meteo_magnitudes(
+        start_date=times[0], end_date=times[-1], sensor_ids=[10, 20],
+        grid_ctx={"grid": np.zeros((2, 2))}, aq_backend=backend,
+        normalize=normalize, observed_only=True,
+    )
+    assert np.isfinite(grid).all()
+    np.testing.assert_array_equal(grid[:, :, 0, 1], 0.0)
+    np.testing.assert_array_equal(grid[8:10], 0.0)  # No original pressure observations.
+    np.testing.assert_array_equal(grid[4, :, 0, 0], [-1.0, 1.0] if normalize else [1.0, 3.0])
+    np.testing.assert_array_equal(grid[5, :, 0, 0], 1.0)
+    np.testing.assert_array_equal(grid[:4, 1], 0.0)  # Direction is interpolated at the second hour.
+    if no_original_wind:
+        np.testing.assert_array_equal(grid[:4], 0.0)
+    else:
+        assert grid[1, 0, 0, 0] == grid[3, 0, 0, 0] == 1.0
+        np.testing.assert_allclose(grid[0, 0, 0, 0], 0.0 if normalize else -1.0, atol=1e-6)
+    all_nox, _ = data_module.get_data(start_date=times[0], end_date=times[-1], magnitudes=[12], aq_backend=backend)
+    assert len(all_nox) == 4  # The meteo filter does not remove NOX observations.
+
+
+def test_observed_only_requires_provenance():
+    class Backend:
+        def get_measurements(self, **kwargs):
+            return pd.DataFrame(columns=["sensor_id", "entry_date", "magnitude_id", "value"])
+
+    with pytest.raises(ValueError, match="is_interpolated"):
+        data_module.get_data(start_date=pd.Timestamp("2024-01-01"), end_date=pd.Timestamp("2024-01-01"),
+                             magnitudes=[83], aq_backend=Backend(), observed_only=True)
 
 
 def _fake_to_grid(*, data: np.ndarray, sensor_ids: list[int], grid_ctx: dict, aq_backend=None):
@@ -58,6 +110,13 @@ def test_collect_data_returns_only_static_components(monkeypatch):
     time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
     pollutant_data = _build_fake_pollutant_data()
     fake_backend = object()
+    meteo_normalize_calls = []
+    meteo_observed_calls = []
+
+    def fake_meteo(**kwargs):
+        meteo_normalize_calls.append(kwargs["normalize"])
+        meteo_observed_calls.append(kwargs["observed_only"])
+        return np.full((2, 2, 2, 2), 40.0, dtype=np.float32), time_index, [811, 812]
 
     monkeypatch.setattr(
         data_module,
@@ -93,7 +152,7 @@ def test_collect_data_returns_only_static_components(monkeypatch):
     monkeypatch.setattr(
         data_module,
         "generate_meteo_magnitudes",
-        lambda **kwargs: (np.full((2, 2, 2, 2), 40.0, dtype=np.float32), time_index, [811, 812]),
+        fake_meteo,
     )
     monkeypatch.setattr(
         data_module,
@@ -131,6 +190,21 @@ def test_collect_data_returns_only_static_components(monkeypatch):
     assert result["test_mask"].dtype == np.bool_
     np.testing.assert_array_equal(result["test_mask"], np.array([[False, False], [False, True]]))
     np.testing.assert_array_equal(result["test_data"][0, :, 1, 1], np.array([4.0, 8.0], dtype=np.float32))
+    data_module.collect_data(
+        start_date=time_index[0],
+        end_date=time_index[-1],
+        add_meteo=True,
+        add_time_channels=False,
+        add_coordinates=False,
+        add_traffic_data=False,
+        pollutants=[7],
+        test_sensors=[40],
+        aq_backend=fake_backend,
+        normalize=True,
+        meteo_observed_only=True,
+    )
+    assert meteo_normalize_calls == [False, True]
+    assert meteo_observed_calls == [False, True]
 
 
 def test_collect_ensemble_data_builds_dynamic_channels_from_static_data(monkeypatch):
@@ -375,7 +449,8 @@ def test_collect_ensemble_data_reuses_static_pollutant_normalization_stats(monke
     np.testing.assert_allclose(result_two["test_data"], static_data["test_data"])
 
 
-def test_generate_meteo_magnitudes_aligns_all_channels_to_requested_sensor_ids(monkeypatch):
+@pytest.mark.parametrize("normalize,edge_cases", [(False, False), (True, False), (True, True)])
+def test_generate_meteo_magnitudes_aligns_all_channels_to_requested_sensor_ids(monkeypatch, normalize, edge_cases):
     time_index = pd.date_range("2024-01-01 00:00:00", periods=2, freq="h")
     sensor_ids = [10, 20]
 
@@ -387,6 +462,12 @@ def test_generate_meteo_magnitudes_aligns_all_channels_to_requested_sensor_ids(m
         89: np.array([[17.0, 18.0], [19.0, 20.0]], dtype=np.float32),
     }
     masks = {mag_id: np.ones_like(data, dtype=np.float32) for mag_id, data in values.items()}
+    if edge_cases:
+        values[83] = np.array([[1.0, 9999.0], [3.0, np.nan]], dtype=np.float32)
+        masks[83] = np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+        values[86][:] = 50.0
+        masks[87][:] = 0.0
+        values[88][0, 0] = np.inf
 
     monkeypatch.setattr(
         data_module,
@@ -416,8 +497,28 @@ def test_generate_meteo_magnitudes_aligns_all_channels_to_requested_sensor_ids(m
         grid_ctx={"grid": np.zeros((2, 2), dtype=int)},
         sensor_ids=sensor_ids,
         aq_backend=object(),
+        normalize=normalize,
     )
 
     assert list(returned_time_index) == list(time_index)
     assert meteo_mags == [811, 812, 83, 86, 87, 88, 89]
     assert grid.shape == (14, 2, 2, 2)
+    expected_values = {
+        811: np.array([[-1.0, 3.0], [0.0, 0.0]]),
+        812: np.array([[0.0, 0.0], [2.0, -4.0]]),
+        **values,
+    }
+    for channel, mag_id in enumerate(meteo_mags):
+        expected = expected_values[mag_id].copy()
+        mask = masks.get(mag_id, np.ones((2, 2)))
+        if normalize:
+            valid = np.isfinite(expected) & np.isfinite(mask) & (mask > 0)
+            observed = expected[valid]
+            expected = np.zeros((2, 2))
+            if observed.size:
+                scale = observed.std() if observed.std() >= 1e-6 else 1.0
+                expected[valid] = (observed - observed.mean()) / scale
+            mask = valid.astype(np.float32)
+        np.testing.assert_allclose(grid[2 * channel, :, 0, :], expected, atol=1e-6)
+        np.testing.assert_array_equal(grid[2 * channel + 1, :, 0, :], mask)
+    assert np.isfinite(grid).all()

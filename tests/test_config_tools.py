@@ -80,6 +80,33 @@ def test_session_config_accepts_optimization_timesteps():
     assert config.optimization_timesteps == "last"
 
 
+def test_session_config_accepts_graph_dip_optimizer_settings():
+    payload = _base_config()
+    payload["surface_optimizer"] = "graph_dip"
+    payload["graph_dip"] = {
+        "nearest_sensors": 3,
+        "hidden_channels": 16,
+        "attention_heads": 2,
+        "patience": 25,
+    }
+
+    config = SessionConfig.model_validate(payload)
+
+    assert config.surface_optimizer == "graph_dip"
+    assert config.graph_dip.nearest_sensors == 3
+    assert config.graph_dip.hidden_channels == 16
+    assert config.graph_dip.patience == 25
+
+
+def test_session_config_rejects_incompatible_graph_dip_attention_dimensions():
+    payload = _base_config()
+    payload["surface_optimizer"] = "graph_dip"
+    payload["graph_dip"] = {"hidden_channels": 10, "attention_heads": 4}
+
+    with pytest.raises(ValueError, match="divisible"):
+        SessionConfig.model_validate(payload)
+
+
 def test_session_config_accepts_valid_all_time_windows_config():
     payload = _base_config()
     payload.pop("random_time_windows")

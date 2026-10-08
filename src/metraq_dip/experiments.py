@@ -38,6 +38,7 @@ from metraq_dip.tools.results_stats import (
 from metraq_dip.tools.tools import get_interpolation_loss, is_truthy
 from metraq_dip.trainer.dip_ensemble_optimizer import DipEnsembleOptimizer, reduce_surface_ensemble
 from metraq_dip.trainer.dip_optimizer import DipOptimizer
+from metraq_dip.trainer.graph_dip_optimizer import GraphDipOptimizer
 
 
 def _get_time_windows(session_config: SessionConfig) -> list[pd.Timestamp]:
@@ -324,6 +325,16 @@ def _build_experiment_artifacts(
     normalization_stats = optimizer_artifacts.get("normalization_stats")
     if normalization_stats is not None:
         experiment_data["normalization_stats"] = normalization_stats
+    for history_key in ("train_huber_history", "val_huber_history"):
+        if all(history_key in member for member in member_artifacts):
+            experiment_data[history_key] = np.stack(
+                [np.asarray(member[history_key], dtype=np.float32) for member in member_artifacts]
+            )
+    if all("epochs_completed" in member for member in member_artifacts):
+        experiment_data["epochs_completed"] = np.asarray(
+            [int(np.asarray(member["epochs_completed"]).item()) for member in member_artifacts],
+            dtype=np.int64,
+        )
 
     return experiment_data
 
@@ -349,6 +360,7 @@ def _run_single_experiment(
         start_date=time_window_dt - date_window,
         end_date=time_window_dt,
         add_meteo=bool(config.get("add_meteo")),
+        meteo_observed_only=bool(config.get("meteo_observed_only")),
         add_time_channels=bool(config.get("add_time_channels")),
         add_coordinates=bool(config.get("add_coordinates")),
         add_traffic_data=bool(config.get("add_traffic_data")),
@@ -358,11 +370,24 @@ def _run_single_experiment(
         aq_backend=aq_backend,
     )
 
+    surface_optimizer = str(config.get("surface_optimizer", "dip")).lower()
+    optimizer_factories = {
+        "dip": DipOptimizer,
+        "graph_dip": GraphDipOptimizer,
+    }
+    if surface_optimizer not in optimizer_factories:
+        valid = ", ".join(sorted(optimizer_factories))
+        raise ValueError(
+            f"Unknown surface_optimizer '{surface_optimizer}'. Expected one of: {valid}"
+        )
+    optimizer_factory = optimizer_factories[surface_optimizer]
+
     if bool(config.get("use_ensemble", True)):
         optimizer = DipEnsembleOptimizer(
             configuration=config,
             static_data=static_data,
             disable_tqdm=disable_nested_tqdm,
+            optimizer_factory=optimizer_factory,
         )
     else:
         split_data = collect_ensemble_data(
@@ -373,7 +398,7 @@ def _run_single_experiment(
             normalize=bool(config.get("normalize")),
             aq_backend=aq_backend,
         )
-        optimizer = DipOptimizer(
+        optimizer = optimizer_factory(
             configuration=config,
             split_data=split_data,
             disable_tqdm=disable_nested_tqdm,

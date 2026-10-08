@@ -1,0 +1,65 @@
+aq_dataset: metraq
+aq_backend: files
+pollutants:
+- 12
+hours: 24
+epochs: 250
+ensemble_size: 5
+lr: 0.01
+optimization_loss: huber
+optimization_timesteps: last
+surface_selection: validation
+surface_optimizer: graph_dip
+normalize: true
+add_meteo: false
+add_time_channels: false
+add_coordinates: false
+add_distance_to_sensors: false
+add_traffic_data: false
+use_ensemble: true
+k_best_n: 3
+model:
+  architecture: unet
+  kernel_size:
+  - 3
+  - 5
+  - 5
+  base_channels: 16
+  levels: 3
+  preserve_time: false
+  learned_upsampling: false
+graph_dip:
+  nearest_sensors: 4
+  hidden_channels: 32
+  attention_heads: 4
+  local_refinement_layers: 1
+  dropout: 0.0
+  patience: 50
+  min_delta: 0.0
+  weight_decay: 1.0e-05
+  spatial_smoothness: 0.0001
+spread_test_groups:
+  n_groups: 10
+  group_size: 4
+  max_uses_per_sensor: 2
+random_time_windows:
+  year: 2024
+  windows_per_month: 1
+  start_hours:
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 15
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  weekend_fraction: 0.4
+huber_delta: 1.0

@@ -150,7 +150,7 @@ class MetraqFiles:
         dataset = self._dataset_for_files(files)
         magnitudes = self._normalize_magnitudes(magnitudes)
         table = dataset.to_table(
-            columns=["sensor_id", "entry_date", "magnitude_id", "value"],
+            columns=["sensor_id", "entry_date", "magnitude_id", "value", "is_interpolated"],
             filter=self._build_filter(start_date=start_date, end_date=end_date, magnitudes=magnitudes),
         )
         df = table.to_pandas()
@@ -161,6 +161,7 @@ class MetraqFiles:
                     "entry_date": pd.Series(dtype="datetime64[ns]"),
                     "magnitude_id": pd.Series(dtype="int32"),
                     "value": pd.Series(dtype="float64"),
+                    "is_interpolated": pd.Series(dtype="bool"),
                 }
             )
 
