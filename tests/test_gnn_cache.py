@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 from metraq_gnn.data import (
@@ -46,7 +47,10 @@ class FakeAQBackend:
         return pd.DataFrame(rows, columns=["sensor_id", "entry_date", "magnitude_id", "value"])
 
 
-def test_sensor_cache_builds_resumes_and_memory_maps(tmp_path):
+@pytest.mark.parametrize("time_unit", ["ns", "us"])
+def test_sensor_cache_builds_resumes_and_memory_maps(tmp_path, monkeypatch, time_unit):
+    date_range = pd.date_range
+    monkeypatch.setattr(pd, "date_range", lambda *args, **kwargs: date_range(*args, **kwargs).as_unit(time_unit))
     backend = FakeAQBackend()
     path = tmp_path / "aq-cache"
     cache = build_aq_sensor_cache(
@@ -63,6 +67,8 @@ def test_sensor_cache_builds_resumes_and_memory_maps(tmp_path):
     assert backend.measurement_calls == 2
     assert cache.values.shape == (5, 4, 1)
     assert cache.availability.all()
+    assert cache.time_index[0] == pd.Timestamp("2023-12-31 22:00")
+    assert cache.timestamps_ns[0] == pd.Timestamp("2023-12-31 22:00").value
     assert isinstance(cache.values, np.memmap)
     assert cache.metadata["completed_years"] == [2023, 2024]
 

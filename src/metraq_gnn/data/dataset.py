@@ -50,7 +50,7 @@ class GraphWindowDataset(Dataset[Data]):
             raise ValueError(
                 "pollutant_data must have shape (2 * pollutants, time, height, width)"
             )
-        timestamps = pd.DatetimeIndex(time_index)
+        timestamps = pd.DatetimeIndex(time_index).as_unit("ns")
         if len(timestamps) != pollution.shape[1]:
             raise ValueError("time_index length must match pollutant_data time dimension")
         if timestamps.has_duplicates or not timestamps.is_monotonic_increasing:

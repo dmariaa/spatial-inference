@@ -19,8 +19,10 @@ def _series(*, periods: int = 8):
     return graph, pollution, extras, time_index
 
 
-def test_dataset_indexes_only_complete_windows_inside_split():
+@pytest.mark.parametrize("time_unit", ["ns", "us"])
+def test_dataset_indexes_only_complete_windows_inside_split(time_unit):
     graph, pollution, extras, time_index = _series()
+    time_index = time_index.as_unit(time_unit)
     dataset = GraphWindowDataset(
         graph=graph,
         pollutant_data=pollution,
