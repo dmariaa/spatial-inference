@@ -26,6 +26,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+app = [
+    "streamlit>=1.50,<2",
+]
 dev = [
   "pytest",
   "pytest-cov",
