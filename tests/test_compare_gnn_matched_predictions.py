@@ -23,7 +23,9 @@ def test_load_matched_requires_identical_keys_and_summarizes(tmp_path: Path):
             "absolute_error": 1.0,
             "squared_error": 1.0,
         }
-        pd.DataFrame([row]).to_csv(directory / "predictions.csv", index=False)
+        pd.DataFrame([row | {"target": 2.0 + 1e-6}]).to_csv(
+            directory / "predictions.csv", index=False
+        )
         for method in ("DIP", "KRG", "IDW"):
             reference_rows.append(row | {"method": method})
     reference = tmp_path / "reference.csv"

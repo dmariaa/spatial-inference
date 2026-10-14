@@ -62,9 +62,26 @@ def load_matched(gnn_root: Path, reference_path: Path) -> pd.DataFrame:
         "squared_error",
     ]
     combined = pd.concat([reference[columns], gnn[columns]], ignore_index=True)
-    target_counts = combined.groupby(KEYS)["target"].nunique(dropna=False)
-    if (target_counts != 1).any():
-        raise click.ClickException("target values differ between matched methods")
+    canonical_targets = (
+        reference[reference["method"] == METHODS[0]][KEYS + ["target"]]
+        .rename(columns={"target": "canonical_target"})
+    )
+    combined = combined.merge(canonical_targets, on=KEYS, validate="many_to_one")
+    target_difference = (combined["target"] - combined["canonical_target"]).abs()
+    if not np.allclose(
+        combined["target"],
+        combined["canonical_target"],
+        rtol=0.0,
+        atol=1e-5,
+    ):
+        raise click.ClickException(
+            "target values differ materially between matched methods: "
+            f"max_difference={target_difference.max()}"
+        )
+    combined["target"] = combined.pop("canonical_target")
+    combined["error"] = combined["prediction"] - combined["target"]
+    combined["absolute_error"] = combined["error"].abs()
+    combined["squared_error"] = combined["error"] ** 2
     return combined
 
 
