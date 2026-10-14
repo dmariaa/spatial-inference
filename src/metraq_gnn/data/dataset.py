@@ -10,6 +10,7 @@ from torch_geometric.data import Data
 
 from metraq_gnn.data.window import build_graph_window, split_training_sensor_masks
 from metraq_gnn.data.cache import AQSensorCache
+from metraq_gnn.data.traffic_cache import TrafficGridCache
 
 
 ArrayLike = np.ndarray | torch.Tensor
@@ -221,6 +222,9 @@ class SensorGraphWindowDataset(Dataset[Data]):
         target_fraction: float | None = None,
         normalization_mean: ArrayLike | None = None,
         normalization_std: ArrayLike | None = None,
+        traffic_cache: TrafficGridCache | None = None,
+        traffic_normalization_mean: float | None = None,
+        traffic_normalization_std: float | None = None,
         include_time_features: bool = False,
         seed: int = 42,
     ) -> None:
@@ -247,6 +251,10 @@ class SensorGraphWindowDataset(Dataset[Data]):
         elif not 0.0 < float(target_fraction) < 1.0:
             raise ValueError("target_fraction must be between 0 and 1")
 
+        start, end = pd.Timestamp(split_start), pd.Timestamp(split_end)
+        if start > end:
+            raise ValueError("split_start must not be after split_end")
+
         self.sensor_cache = cache
         self.graph = cache.graph
         self.time_index = cache.time_index
@@ -265,13 +273,40 @@ class SensorGraphWindowDataset(Dataset[Data]):
         )
         if self.normalization_std is not None and np.any(self.normalization_std <= 0):
             raise ValueError("normalization_std values must be positive")
+        if (traffic_normalization_mean is None) != (traffic_normalization_std is None):
+            raise ValueError(
+                "traffic_normalization_mean and traffic_normalization_std must be provided together"
+            )
+        if traffic_cache is None and traffic_normalization_mean is not None:
+            raise ValueError("traffic normalization requires traffic_cache")
+        if traffic_cache is not None:
+            if traffic_cache.grid_shape != cache.grid_shape:
+                raise ValueError("traffic and AQ caches must use the same grid shape")
+            traffic_start = int(
+                np.searchsorted(cache.timestamps_ns, traffic_cache.timestamps_ns[0])
+            )
+            traffic_stop = traffic_start + len(traffic_cache.timestamps_ns)
+            if traffic_stop > len(cache.timestamps_ns) or not np.array_equal(
+                traffic_cache.timestamps_ns,
+                cache.timestamps_ns[traffic_start:traffic_stop],
+            ):
+                raise ValueError(
+                    "traffic timestamps must be an exact contiguous subinterval of AQ timestamps"
+                )
+            if start < traffic_cache.time_index[0] or end > traffic_cache.time_index[-1]:
+                raise ValueError("dataset split must be contained in the traffic cache period")
+            if traffic_normalization_mean is None:
+                raise ValueError("traffic cache requires TRAIN normalization statistics")
+            if not np.isfinite(traffic_normalization_std) or traffic_normalization_std <= 0:
+                raise ValueError("traffic_normalization_std must be positive")
+        self.traffic_cache = traffic_cache
+        self.traffic_aq_offset = traffic_start if traffic_cache is not None else None
+        self.traffic_normalization_mean = traffic_normalization_mean
+        self.traffic_normalization_std = traffic_normalization_std
         self.include_time_features = bool(include_time_features)
         self.hours = int(hours)
         self.seed = int(seed)
         self.epoch = 0
-        start, end = pd.Timestamp(split_start), pd.Timestamp(split_end)
-        if start > end:
-            raise ValueError("split_start must not be after split_end")
         self.end_indices = self._select_end_indices(start, end)
         if not self.end_indices:
             raise ValueError("split contains no complete windows with valid targets")
@@ -326,12 +361,31 @@ class SensorGraphWindowDataset(Dataset[Data]):
             normalization_mean=self.normalization_mean,
             normalization_std=self.normalization_std,
         )
-        extra_features = None
-        if self.include_time_features:
-            extra_features = _cyclical_time_features(
-                self.time_index[start_index : end_index + 1],
-                self.sensor_cache.grid_shape,
+        extra_parts = []
+        if self.traffic_cache is not None:
+            traffic_start = start_index - int(self.traffic_aq_offset)
+            traffic_end = end_index + 1 - int(self.traffic_aq_offset)
+            traffic_values = np.asarray(
+                self.traffic_cache.values[traffic_start:traffic_end], dtype=np.float32
             )
+            traffic_available = np.asarray(
+                self.traffic_cache.availability[traffic_start:traffic_end], dtype=bool
+            )
+            normalized_traffic = np.zeros_like(traffic_values, dtype=np.float32)
+            normalized_traffic[traffic_available] = (
+                traffic_values[traffic_available] - float(self.traffic_normalization_mean)
+            ) / float(self.traffic_normalization_std)
+            extra_parts.append(
+                np.stack((normalized_traffic, traffic_available.astype(np.float32)))
+            )
+        if self.include_time_features:
+            extra_parts.append(
+                _cyclical_time_features(
+                    self.time_index[start_index : end_index + 1],
+                    self.sensor_cache.grid_shape,
+                )
+            )
+        extra_features = np.concatenate(extra_parts) if extra_parts else None
         if self.target_sensor_mask is None:
             generator = torch.Generator().manual_seed(self.seed + self.epoch * len(self) + index)
             context, target = split_training_sensor_masks(

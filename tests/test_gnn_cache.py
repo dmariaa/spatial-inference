@@ -11,6 +11,7 @@ from metraq_gnn.data import (
     compute_training_normalization,
     load_aq_sensor_cache,
     split_sensor_nodes,
+    load_traffic_grid_cache,
 )
 
 
@@ -209,3 +210,88 @@ def test_sensor_dataset_appends_cyclical_time_features(tmp_path):
     torch.testing.assert_close(sample.x[:, 0, 3], torch.ones(sample.num_nodes))
     expected_hour_sin = torch.full((sample.num_nodes,), 0.5)
     torch.testing.assert_close(sample.x[:, 2, 2], expected_hour_sin)
+
+
+def test_sensor_dataset_appends_normalized_traffic_and_availability(tmp_path):
+    cache = build_aq_sensor_cache(
+        path=tmp_path / "aq-cache",
+        aq_backend=FakeAQBackend(),
+        start="2024-01-01 00:00",
+        end="2024-01-01 04:00",
+        magnitudes=[8],
+        cell_size_m=1000,
+        margin_m_x=0,
+        margin_m_y=0,
+    )
+    traffic_path = tmp_path / "traffic-cache"
+    traffic_path.mkdir()
+    (traffic_path / "metadata.json").write_text(
+        '{"grid_shape": [%d, %d]}' % cache.grid_shape, encoding="utf-8"
+    )
+    np.save(traffic_path / "timestamps.npy", np.asarray(cache.timestamps_ns))
+    traffic_values = np.full((5, *cache.grid_shape), 30.0, dtype=np.float32)
+    traffic_available = np.ones_like(traffic_values, dtype=bool)
+    traffic_available[0, 0, 0] = False
+    np.save(traffic_path / "traffic_intensity.npy", traffic_values)
+    np.save(traffic_path / "traffic_availability.npy", traffic_available)
+    traffic_cache = load_traffic_grid_cache(traffic_path)
+    node_mask = np.zeros(cache.grid_shape, dtype=bool)
+    node_mask.reshape(-1)[np.unique(cache.sensor_node_indices)] = True
+    dataset = SensorGraphWindowDataset(
+        cache=cache,
+        traffic_cache=traffic_cache,
+        traffic_normalization_mean=20.0,
+        traffic_normalization_std=5.0,
+        context_sensor_mask=node_mask,
+        forbidden_context_mask=np.zeros(cache.grid_shape, dtype=bool),
+        target_fraction=0.5,
+        hours=3,
+        split_start="2024-01-01 00:00",
+        split_end="2024-01-01 04:00",
+        seed=7,
+    )
+
+    sample = dataset[0]
+
+    assert sample.x.shape[-1] == 4
+    assert sample.x[0, 0, 2] == 0.0
+    assert sample.x[0, 0, 3] == 0.0
+    torch.testing.assert_close(sample.x[:, 1:, 2], torch.full_like(sample.x[:, 1:, 2], 2.0))
+    torch.testing.assert_close(sample.x[:, 1:, 3], torch.ones_like(sample.x[:, 1:, 3]))
+
+
+def test_sensor_dataset_rejects_misaligned_traffic_timestamps(tmp_path):
+    cache = build_aq_sensor_cache(
+        path=tmp_path / "aq-cache",
+        aq_backend=FakeAQBackend(),
+        start="2024-01-01 00:00",
+        end="2024-01-01 04:00",
+        magnitudes=[8],
+        cell_size_m=1000,
+        margin_m_x=0,
+        margin_m_y=0,
+    )
+    traffic_path = tmp_path / "traffic-cache"
+    traffic_path.mkdir()
+    (traffic_path / "metadata.json").write_text(
+        '{"grid_shape": [%d, %d]}' % cache.grid_shape, encoding="utf-8"
+    )
+    np.save(traffic_path / "timestamps.npy", np.asarray(cache.timestamps_ns) + 1)
+    np.save(traffic_path / "traffic_intensity.npy", np.zeros((5, *cache.grid_shape), dtype=np.float32))
+    np.save(traffic_path / "traffic_availability.npy", np.zeros((5, *cache.grid_shape), dtype=bool))
+    node_mask = np.zeros(cache.grid_shape, dtype=bool)
+    node_mask.reshape(-1)[np.unique(cache.sensor_node_indices)] = True
+
+    with pytest.raises(ValueError, match="exact contiguous subinterval"):
+        SensorGraphWindowDataset(
+            cache=cache,
+            traffic_cache=load_traffic_grid_cache(traffic_path),
+            traffic_normalization_mean=0.0,
+            traffic_normalization_std=1.0,
+            context_sensor_mask=node_mask,
+            forbidden_context_mask=np.zeros(cache.grid_shape, dtype=bool),
+            target_fraction=0.5,
+            hours=3,
+            split_start="2024-01-01 00:00",
+            split_end="2024-01-01 04:00",
+        )
