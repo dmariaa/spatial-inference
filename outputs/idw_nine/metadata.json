@@ -1,0 +1,172 @@
+{
+  "month": "2024-01",
+  "pollutant_ids": [
+    8,
+    7,
+    12,
+    9,
+    10,
+    14,
+    6,
+    30,
+    20
+  ],
+  "pollutants": [
+    {
+      "id": 8,
+      "name": "NO₂",
+      "unit": "µg/m³",
+      "limits": [
+        1.0,
+        162.0
+      ],
+      "sensors": 24,
+      "min_observed_cells": 15,
+      "max_observed_cells": 24,
+      "observed_hours": 767,
+      "records": 18256
+    },
+    {
+      "id": 7,
+      "name": "NO",
+      "unit": "µg/m³",
+      "limits": [
+        0.0,
+        455.0
+      ],
+      "sensors": 24,
+      "min_observed_cells": 15,
+      "max_observed_cells": 24,
+      "observed_hours": 767,
+      "records": 18256
+    },
+    {
+      "id": 12,
+      "name": "NOx",
+      "unit": "µg/m³",
+      "limits": [
+        2.0,
+        853.0
+      ],
+      "sensors": 24,
+      "min_observed_cells": 15,
+      "max_observed_cells": 24,
+      "observed_hours": 767,
+      "records": 18256
+    },
+    {
+      "id": 9,
+      "name": "PM2.5",
+      "unit": "µg/m³",
+      "limits": [
+        1.0,
+        48.0
+      ],
+      "sensors": 8,
+      "min_observed_cells": 6,
+      "max_observed_cells": 8,
+      "observed_hours": 767,
+      "records": 6053
+    },
+    {
+      "id": 10,
+      "name": "PM10",
+      "unit": "µg/m³",
+      "limits": [
+        1.0,
+        113.0
+      ],
+      "sensors": 13,
+      "min_observed_cells": 8,
+      "max_observed_cells": 13,
+      "observed_hours": 767,
+      "records": 9829
+    },
+    {
+      "id": 14,
+      "name": "O₃",
+      "unit": "µg/m³",
+      "limits": [
+        1.0,
+        92.0
+      ],
+      "sensors": 13,
+      "min_observed_cells": 6,
+      "max_observed_cells": 13,
+      "observed_hours": 767,
+      "records": 9874
+    },
+    {
+      "id": 6,
+      "name": "CO",
+      "unit": "mg/m³",
+      "limits": [
+        0.0,
+        3.0
+      ],
+      "sensors": 4,
+      "min_observed_cells": 3,
+      "max_observed_cells": 4,
+      "observed_hours": 767,
+      "records": 3033
+    },
+    {
+      "id": 30,
+      "name": "Benceno",
+      "unit": "µg/m³",
+      "limits": [
+        0.0,
+        10.0
+      ],
+      "sensors": 6,
+      "min_observed_cells": 3,
+      "max_observed_cells": 6,
+      "observed_hours": 767,
+      "records": 3756
+    },
+    {
+      "id": 20,
+      "name": "Tolueno",
+      "unit": "µg/m³",
+      "limits": [
+        0.0,
+        44.0
+      ],
+      "sensors": 6,
+      "min_observed_cells": 3,
+      "max_observed_cells": 6,
+      "observed_hours": 767,
+      "records": 3740
+    }
+  ],
+  "grid_shape": [
+    24,
+    23
+  ],
+  "bounds_utm": [
+    431000.0,
+    4464000.0,
+    454000.0,
+    4488000.0
+  ],
+  "metric_crs": "EPSG:25830",
+  "cell_size_m": 1000,
+  "window_hours": 24,
+  "observed_only": true,
+  "known_values_preserved": true,
+  "full_hourly_coverage": true,
+  "idw_power": 2,
+  "idw_neighbors": 8,
+  "map_source": "OpenStreetMap via Overpass; same reference map, clipped to grid",
+  "map_copyright": "https://www.openstreetmap.org/copyright",
+  "duration_seconds": 62,
+  "fps": 24,
+  "resolution": [
+    1080,
+    1080
+  ],
+  "layout": "compact 3x3, centered labels below cubes, no displayed scales",
+  "time_direction": "Newest at front; history moves backwards",
+  "color_limits": "Independent per pollutant, fixed over the full month",
+  "visual_smoothing": "Linear color blend between adjacent hourly reconstructions"
+}
