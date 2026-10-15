@@ -88,7 +88,8 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
     np.savez(output / "partition.npz", train_mask=train,
              validation_mask=validation, test_mask=test,
              sensor_ids=aq.sensor_ids, sensor_node_indices=aq.sensor_node_indices)
-    config = dict(implementation="batched-snapshots", mode=mode, seed=seed, test_evaluated=False, hours=24,
+    config = dict(epsilon_m=model.epsilon_m, distance_scale_m=model.distance_scale_m,
+                  source_policy="all-current-visible", implementation="batched-snapshots", mode=mode, seed=seed, test_evaluated=False, hours=24,
                   uses_history=False, train_period="2015-2022", validation_period="2023",
                   train_nodes=np.flatnonzero(train).tolist(),
                   validation_nodes=np.flatnonzero(validation).tolist(),
@@ -111,16 +112,19 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
                              show_progress=True, logger=logger)
         training_started = perf_counter()
         if mode == "fixed":
-            result = dict(validation=trainer.evaluate(val_loader), epochs_completed=0)
+            validation_metrics = trainer.evaluate(val_loader)
+            result = dict(validation=validation_metrics, epochs_completed=0, best_epoch=-1,
+                          best_validation_mae=validation_metrics["mae"])
+            torch.save(dict(epoch=-1, validation_loss=validation_metrics["mae"],
+                            optimization_loss="mae", selection="fixed-no-training",
+                            model_state_dict=model.state_dict()), output / "best-model.pt")
         else:
             fit = trainer.fit(train_loader, val_loader, epochs=epochs,
                               checkpoint_path=output / "best-model.pt")
             result = dict(best_epoch=fit.best_epoch, best_validation_mae=fit.best_validation_loss,
                           epochs_completed=fit.epochs_completed, history=fit.history)
-        if mode != "fixed":
-            best_metrics = fit.history[fit.best_epoch]
-            result["best_validation_mae_physical"] = (
-                best_metrics["validation_mae"] * float(std[0]) if len(std) == 1 else None)
+        result["best_validation_mae_physical"] = (
+            result["best_validation_mae"] * float(std[0]) if len(std) == 1 else None)
         result.update(training_seconds=perf_counter()-training_started,
                       elapsed_seconds=perf_counter()-started,
                       setup_seconds=training_started-started, wandb_url=config["wandb_url"])

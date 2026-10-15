@@ -73,6 +73,10 @@ def test_synthetic_cache_training_without_test(tmp_path, monkeypatch):
         assert loggers[-1].finished == 0
         assert len(loggers[-1].epochs) == (0 if mode == "fixed" else 2)
         assert np.isfinite(summary["power"])
+        assert (output / "best-model.pt").is_file()
         if mode != "fixed":
-            assert (output / "best-model.pt").is_file()
             assert summary["epochs_completed"] == 2
+        else:
+            assert summary["epochs_completed"] == 0
+            assert summary["best_epoch"] == -1
+            assert summary["best_validation_mae_physical"] > 0

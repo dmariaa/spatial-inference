@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import pytest
 from click.testing import CliRunner
 
 from metraq_gnn import kernel_evaluation
@@ -13,7 +14,8 @@ from metraq_gnn.data.graph import build_grid_graph
 from metraq_gnn.model.convex_kernel import ConvexGeometricKernel
 
 
-def test_frozen_test_checkpoint_is_label_independent(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["fixed", "neural"])
+def test_frozen_test_checkpoint_is_label_independent(tmp_path, monkeypatch, mode):
     times = pd.date_range("2024-01-01", periods=25, freq="h").as_unit("ns")
     values = np.broadcast_to(np.array([10., 20., 30.])[None, :, None], (25, 3, 1)).copy()
     aq = AQSensorCache(
@@ -27,10 +29,11 @@ def test_frozen_test_checkpoint_is_label_independent(tmp_path, monkeypatch):
     run.mkdir()
     config = dict(train_nodes=[0], validation_nodes=[1], test_sensor_ids=[30],
                   normalization_mean=[0.], normalization_std=[1.], hours=24, seed=1,
-                  mode="neural", cell_size_m=1000)
+                  mode=mode, cell_size_m=1000)
     (run / "config.json").write_text(json.dumps(config))
-    (run / "summary.json").write_text(json.dumps({"best_epoch": 4}))
-    torch.save({"epoch": 4, "model_state_dict": ConvexGeometricKernel().state_dict()},
+    best_epoch = -1 if mode == "fixed" else 4
+    (run / "summary.json").write_text(json.dumps({"best_epoch": best_epoch}))
+    torch.save({"epoch": best_epoch, "model_state_dict": ConvexGeometricKernel(mode=mode).state_dict()},
                run / "best-model.pt")
     np.savez(run / "partition.npz", train_mask=np.array([[1, 0, 0]], bool),
              validation_mask=np.array([[0, 1, 0]], bool), test_mask=np.array([[0, 0, 1]], bool),
@@ -46,7 +49,7 @@ def test_frozen_test_checkpoint_is_label_independent(tmp_path, monkeypatch):
         summary = json.loads((output / "summary.json").read_text())
         assert summary["test_windows"] == 2
         assert summary["test_target_count"] == 2
-        assert summary["checkpoint_epoch"] == 4
+        assert summary["checkpoint_epoch"] == best_epoch
         assert summary["checkpoint_sha256"] == digest
         outputs.append(pd.read_csv(output / "predictions.csv"))
     np.testing.assert_array_equal(outputs[0]["prediction"], outputs[1]["prediction"])
