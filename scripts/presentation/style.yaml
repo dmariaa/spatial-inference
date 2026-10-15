@@ -1,0 +1,26 @@
+# Appearance of the 3D presentation. Angles are in degrees.
+width: 1080
+height: 1080
+texture_size: 384
+cube_depth: 2.7
+column_gap: 0.2
+row_gap: 0.2
+camera_azimuth: 24
+camera_elevation: 15
+camera_view_angle: 30
+camera_zoom: 1.35
+background: '#10141b'
+text_color: '#f5f5f5'
+muted_color: '#bdc8d5'
+map_blend: 0.16
+extrude_map_lines: true
+body_width_fraction: 0.96
+header_fraction: 0.09
+footer_fraction: 0.06
+label_color: '#f5f5f5'
+label_height: 0.12
+label_font_size: 25
+title_font_size: 30
+subtitle_font_size: 19
+footer_font_size: 14
+artifact_prefix: idw_cubes_scene_labels_full

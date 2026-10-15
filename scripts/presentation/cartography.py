@@ -78,16 +78,27 @@ def load_map(bounds, crs, output, map_cache=None):
     elif (directory / 'osm_features.json').exists():
         raise ValueError('Unverified map cache; use a new output directory.')
     if map_cache is not None and (not (directory / 'osm_features.json').exists()):
-        candidate = map_cache / 'data.npz'
-        if not candidate.exists():
-            raise ValueError('Map cache must contain data.npz with its geographic bounds.')
-        with np.load(candidate) as saved:
-            if not np.array_equal(saved['bounds'], bounds):
+        map_cache = Path(map_cache)
+        source_directory = map_cache / 'cartography' if (map_cache / 'cartography').is_dir() else map_cache
+        source_metadata = source_directory / 'bounds.json'
+        if source_metadata.exists():
+            if json.loads(source_metadata.read_text(encoding='utf-8')) != expected:
                 raise ValueError('Imported map bounds differ from the reconstruction grid.')
-        source = map_cache / 'osm_features.json'
-        if not source.exists():
-            raise ValueError('The imported map cache has no OSM features.')
-        shutil.copyfile(source, directory / source.name)
+        else:
+            candidate = map_cache / 'data.npz'
+            if not candidate.exists():
+                raise ValueError('Map cache must contain bounds.json or data.npz with its geographic bounds.')
+            with np.load(candidate) as saved:
+                if not np.array_equal(saved['bounds'], bounds):
+                    raise ValueError('Imported map bounds differ from the reconstruction grid.')
+        files = ('osm_features.json', 'map.png', 'map_overlay.png')
+        if not (source_directory / files[0]).exists() and not all(
+                (source_directory / name).exists() for name in files[1:]):
+            raise ValueError('The imported map cache has no OSM features or rendered maps.')
+        for name in files:
+            source = source_directory / name
+            if source.exists() and source.resolve() != (directory / name).resolve():
+                shutil.copyfile(source, directory / name)
     metadata_path.write_text(json.dumps(expected, indent=2), encoding='utf-8')
     image_path = directory / 'map.png'
     overlay_path = directory / 'map_overlay.png'

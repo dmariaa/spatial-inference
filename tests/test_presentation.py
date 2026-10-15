@@ -91,3 +91,27 @@ def test_fresh_idw_preserves_zero_and_ignores_interpolated_rows(tmp_path, monkey
         assert saved['idw'].max() == 10
         assert np.isfinite(saved['idw']).all()
         assert np.all(saved['counts'] == 2)
+
+
+def test_import_modern_map_cache_without_network(tmp_path, monkeypatch):
+    import scripts.presentation.cartography as cartography
+    source = tmp_path / 'source' / 'cartography'
+    source.mkdir(parents=True)
+    bounds = [0., 0., 2., 2.]
+    (source / 'bounds.json').write_text(json.dumps(dict(bounds_utm=bounds, metric_crs='EPSG:25830')))
+    Image.new('RGBA', (2, 2), (10, 20, 30, 255)).save(source / 'map.png')
+    Image.new('RGBA', (2, 2)).save(source / 'map_overlay.png')
+    def unavailable(*args, **kwargs):
+        raise AssertionError('Reusing a map must not access the network')
+    monkeypatch.setattr(cartography, 'basemap', unavailable)
+    images = load_map(bounds, 'EPSG:25830', tmp_path / 'new', source.parent)
+    assert images[0].getpixel((0, 0)) == (10, 20, 30, 255)
+    assert (tmp_path / 'new' / 'cartography' / 'map.png').read_bytes() == (source / 'map.png').read_bytes()
+    with pytest.raises(ValueError, match='Imported map bounds differ'):
+        load_map([0., 0., 3., 3.], 'EPSG:25830', tmp_path / 'other', source.parent)
+
+
+def test_explicit_data_cache_requires_existing_manifest(tmp_path):
+    from scripts.presentation.rendering import render
+    with pytest.raises(ValueError, match='Data cache must contain data_manifest.json'):
+        render('2024-01', tmp_path / 'new', preview_only=True, data_cache=tmp_path)

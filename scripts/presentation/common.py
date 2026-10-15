@@ -1,9 +1,9 @@
-"""Shared palette, fonts, perspective texture mapping and video encoding."""
+"""Shared palette, fonts, video encoding."""
 from contextlib import contextmanager, suppress
 import shutil
 import subprocess
 import numpy as np
-from PIL import Image, ImageDraw, ImageChops, ImageFont
+from PIL import ImageFont
 PALETTE = np.array([[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]])
 
 def font(size):
@@ -39,22 +39,3 @@ def video_writer(path, size, fps):
             status = encoder.wait()
         if status:
             raise RuntimeError('Video encoding failed.')
-
-def mapped(canvas, tex, pts):
-    """Project a texture onto a face using a perspective homography."""
-    pts = np.asarray(pts)
-    mn = np.floor(pts.min(axis=0)).astype(int)
-    mx = np.ceil(pts.max(axis=0)).astype(int)
-    local = pts - mn
-    (tw, th) = tex.size
-    rows = []
-    target = []
-    for ((x, y), (u, v)) in zip(local, [(0, 0), (tw, 0), (tw, th), (0, th)]):
-        rows.extend([[x, y, 1, 0, 0, 0, -u * x, -u * y], [0, 0, 0, x, y, 1, -v * x, -v * y]])
-        target.extend([u, v])
-    coeff = np.linalg.solve(np.asarray(rows), np.asarray(target))
-    warped = tex.transform(tuple(mx - mn), Image.Transform.PERSPECTIVE, tuple(coeff), Image.Resampling.BILINEAR)
-    mask = Image.new('L', tuple(mx - mn))
-    ImageDraw.Draw(mask).polygon([tuple(v) for v in local], fill=255)
-    warped.putalpha(ImageChops.multiply(warped.getchannel('A'), mask))
-    canvas.alpha_composite(warped, tuple(mn))
