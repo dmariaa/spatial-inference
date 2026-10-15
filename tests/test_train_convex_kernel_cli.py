@@ -42,15 +42,36 @@ def test_synthetic_cache_training_without_test(tmp_path, monkeypatch):
         values=values, availability=np.isfinite(values),
         graph=build_grid_graph({"grid": np.zeros((1, 7))}))
     monkeypatch.setattr(module, "load_aq_sensor_cache", lambda _: cache)
+    loggers = []
+    class FakeLogger:
+        url = "https://example.invalid/local-test"
+        def __init__(self, **kwargs):
+            self.epochs = []
+            self.finished = None
+            loggers.append(self)
+        def log_epoch(self, metrics, *, step):
+            self.epochs.append(step)
+        def log_summary(self, summary):
+            pass
+        def log_checkpoint(self, path):
+            assert Path(path).is_file()
+        def finish(self, *, exit_code):
+            self.finished = exit_code
+    monkeypatch.setattr(module, "WandbLogger", FakeLogger)
     for mode in ("fixed", "power", "neural"):
         output = tmp_path / mode
         result = CliRunner().invoke(module.main, [
             "--cache", str(tmp_path), "--output", str(output),
             "--mode", mode, "--test-sensor-ids", "6", "--validation-nodes", "2",
-            "--epochs", "2", "--batch-size", "2", "--seed", "7"])
+            "--epochs", "2", "--batch-size", "2", "--seed", "7",
+            "--wandb", "--wandb-mode", "disabled"])
         assert result.exit_code == 0, result.output + repr(result.exception)
         summary = json.loads((output / "summary.json").read_text())
         assert summary["test_evaluated"] is False
+        assert summary["wandb_url"] == FakeLogger.url
+        assert summary["training_seconds"] > 0
+        assert loggers[-1].finished == 0
+        assert len(loggers[-1].epochs) == (0 if mode == "fixed" else 2)
         assert np.isfinite(summary["power"])
         if mode != "fixed":
             assert (output / "best-model.pt").is_file()

@@ -1,17 +1,17 @@
 """Train the geometric kernel on TRAIN/validation only; never evaluate TEST."""
 import json
 from pathlib import Path
+from time import perf_counter
 import click
 import numpy as np
 import torch
-from torch.utils.data import Subset
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader, Subset
 from metraq_gnn.data.cache import load_aq_sensor_cache
-from metraq_gnn.data.dataset import SensorGraphWindowDataset
 from metraq_gnn.data.splits import split_sensor_nodes, compute_training_normalization
-from metraq_gnn.data.kernel_window import KernelWindowDataset
+from metraq_gnn.data.kernel_window import CachedKernelDataset, collate_kernel_snapshots
 from metraq_gnn.model.convex_kernel import ConvexGeometricKernel
 from metraq_gnn.trainer import GNNTrainer
+from metraq_gnn.tracking import WandbLogger
 
 
 @click.command(context_settings={"show_default": True})
@@ -29,8 +29,15 @@ from metraq_gnn.trainer import GNNTrainer
 @click.option("--max-train-windows", type=click.IntRange(min=1))
 @click.option("--max-validation-windows", type=click.IntRange(min=1))
 @click.option("--device", default="cpu")
+@click.option("--wandb", is_flag=True)
+@click.option("--wandb-project", default="metraq-gnn-test")
+@click.option("--wandb-entity", default="dmariaa-team")
+@click.option("--wandb-name")
+@click.option("--wandb-mode", type=click.Choice(["online", "offline", "disabled"]), default="online")
 def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
-         batch_size, max_train_windows, max_validation_windows, device, partition_summary):
+         batch_size, max_train_windows, max_validation_windows, device, partition_summary,
+         wandb, wandb_project, wandb_entity, wandb_name, wandb_mode):
+    started = perf_counter()
     if output.exists():
         raise click.ClickException("output already exists; use a new directory")
     seed = int(np.random.default_rng().integers(0, 2**31 - 1)) if seed is None else seed
@@ -61,24 +68,27 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
     common = dict(cache=aq, hours=24, context_sensor_mask=train,
                   forbidden_context_mask=validation | test, seed=seed,
                   normalization_mean=mean, normalization_std=std)
-    training = KernelWindowDataset(SensorGraphWindowDataset(
+    training = CachedKernelDataset(
         **common, target_fraction=.25, split_start="2015-01-01",
-        split_end="2022-12-31 23:00"))
-    validating = KernelWindowDataset(SensorGraphWindowDataset(
+        split_end="2022-12-31 23:00")
+    validating = CachedKernelDataset(
         **common, target_sensor_mask=validation, split_start="2023-01-01",
-        split_end="2023-12-31 23:00"))
+        split_end="2023-12-31 23:00")
     def loader(dataset, maximum, shuffle):
         if maximum is not None:
             dataset = Subset(dataset, range(min(maximum, len(dataset))))
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
+                          collate_fn=collate_kernel_snapshots)
     train_loader = loader(training, max_train_windows, True)
     val_loader = loader(validating, max_validation_windows, False)
     model = ConvexGeometricKernel(mode=mode, cell_size_m=aq.metadata["cell_size_m"])
+    model.prepare_geometry(aq.graph.pos, np.unique(aq.sensor_node_indices[
+        train.reshape(-1)[aq.sensor_node_indices]]))
     output.mkdir(parents=True)
     np.savez(output / "partition.npz", train_mask=train,
              validation_mask=validation, test_mask=test,
              sensor_ids=aq.sensor_ids, sensor_node_indices=aq.sensor_node_indices)
-    config = dict(mode=mode, seed=seed, test_evaluated=False, hours=24,
+    config = dict(implementation="batched-snapshots", mode=mode, seed=seed, test_evaluated=False, hours=24,
                   uses_history=False, train_period="2015-2022", validation_period="2023",
                   train_nodes=np.flatnonzero(train).tolist(),
                   validation_nodes=np.flatnonzero(validation).tolist(),
@@ -89,24 +99,44 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
                   epochs_requested=epochs, batch_size=batch_size,
                   train_windows=len(train_loader.dataset),
                   validation_windows=len(val_loader.dataset))
-    (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    trainer = GNNTrainer(model=model, device=device, optimization_loss="mae",
-                         show_progress=True)
-    if mode == "fixed":
-        result = dict(validation=trainer.evaluate(val_loader), epochs_completed=0)
-    else:
-        fit = trainer.fit(train_loader, val_loader, epochs=epochs,
-                          checkpoint_path=output / "best-model.pt")
-        result = dict(best_epoch=fit.best_epoch, best_validation_mae=fit.best_validation_loss,
-                      epochs_completed=fit.epochs_completed, history=fit.history)
-    if mode != "fixed":
-        best_metrics = fit.history[fit.best_epoch]
-        result["best_validation_mae_physical"] = (
-            best_metrics["validation_mae"] * float(std[0]) if len(std) == 1 else None)
-    result.update(power=float(model.power.detach().cpu()), test_evaluated=False)
-    (output / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    click.echo(json.dumps(result, indent=2))
+    logger = (WandbLogger(
+        project=wandb_project, entity=wandb_entity, name=wandb_name,
+        mode=wandb_mode, config=config, tags=["convex-kernel", "optimized", "pilot"])
+        if wandb else None)
+    config["wandb_url"] = logger.url if logger is not None else None
+    exit_code = 1
+    try:
+        (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+        trainer = GNNTrainer(model=model, device=device, optimization_loss="mae",
+                             show_progress=True, logger=logger)
+        training_started = perf_counter()
+        if mode == "fixed":
+            result = dict(validation=trainer.evaluate(val_loader), epochs_completed=0)
+        else:
+            fit = trainer.fit(train_loader, val_loader, epochs=epochs,
+                              checkpoint_path=output / "best-model.pt")
+            result = dict(best_epoch=fit.best_epoch, best_validation_mae=fit.best_validation_loss,
+                          epochs_completed=fit.epochs_completed, history=fit.history)
+        if mode != "fixed":
+            best_metrics = fit.history[fit.best_epoch]
+            result["best_validation_mae_physical"] = (
+                best_metrics["validation_mae"] * float(std[0]) if len(std) == 1 else None)
+        result.update(training_seconds=perf_counter()-training_started,
+                      elapsed_seconds=perf_counter()-started,
+                      setup_seconds=training_started-started, wandb_url=config["wandb_url"])
+        result.update(power=float(model.power.detach().cpu()), test_evaluated=False)
+        (output / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if logger is not None:
+            logger.log_summary({key: value for key, value in result.items()
+                                if isinstance(value, (int, float))})
+        click.echo(json.dumps(result, indent=2))
+        exit_code = 0
+    finally:
+        if logger is not None:
+            logger.finish(exit_code=exit_code)
+
 
 
 if __name__ == "__main__":
     main()
+
