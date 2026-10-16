@@ -53,19 +53,29 @@ medidas se mantienen exactamente en sus celdas; solo se estiman las demás.
 El cursor distingue media observada y estimación del método. El modo de colores
 automáticos utiliza el rango de toda la superficie mostrada.
 
-DIP-CNN ejecuta el DipOptimizer existente con UNet3D (dos niveles, 16 canales
-base, kernel 1×3×3), ruido aleatorio y ajuste MAE sobre las observaciones de una
-hora. Normaliza con media/desviación de esas observaciones y devuelve unidades
-originales. Se puede elegir 100, 250 o 500 iteraciones. Utiliza la última
-superficie, sin selección por validación ni ensemble. Se ejecuta localmente en
-CPU, con una sola optimización a la vez, y no fija semillas.
+DIP-CNN utiliza hasta 24 horas, incluida la seleccionada: al comienzo del
+origen utiliza el historial disponible. Las horas sin medidas conservan máscaras
+vacías y nunca se utilizan observaciones futuras. Reconstruye la última hora.
 
-Este visor usa todas las medidas disponibles y no constituye una evaluación
-TRAIN/VALIDATION/TEST ni reproduce las campañas de 24 horas. La tabla de estaciones
-y su CSV continúan mostrando medidas, no predicciones. Con una sola celda observada
-o valores constantes se muestra un campo constante y se indica en la interfaz.
-Sin medidas no se inventa una superficie. No se recortan estimaciones a los
-límites de la escala fija; los valores reales se pueden consultar en el cursor.
+Ejecuta cinco miembros con DipOptimizer y UNet3D (tres niveles, 16 canales base,
+kernel 3×5×5; dos niveles en grids y ventanas muy pequeños). Para cada miembro
+elige aleatoriamente hasta cuatro celdas de validación observadas en la última
+hora, reduciendo el número al 20 % cuando hay pocas celdas. Las celdas retenidas
+se excluyen de entradas y entrenamiento durante toda la ventana. Se normaliza
+solo con TRAIN. Optimiza MAE en las horas disponibles y promedia las tres mejores
+superficies por MAE de validación (o las disponibles si hay menos iteraciones).
+La superficie final es la media de los cinco miembros. No hay sensores de TEST.
+
+El selector controla las iteraciones por miembro. El cálculo sigue en CPU,
+serializado, con ruido e inicializaciones aleatorias. El visor indica las horas,
+miembros y celdas de validación utilizados. Este procedimiento no es una evaluación
+TEST ni incluye los canales auxiliares de otros experimentos.
+
+Las medidas reales se restauran en las celdas de la hora seleccionada; tabla y
+CSV siguen mostrando observaciones. Con una única celda espacial disponible o
+valores constantes se usa un campo constante y se informa. Sin medidas en la
+hora seleccionada no se inventa una superficie. La escala fija no recorta las
+estimaciones: el cuadro de información muestra su valor real.
 
 Hasta 32 superficies quedan en caché por origen, contaminante, hora, grid, método
 e iteraciones. Cambiar escala o visibilidad de sensores no vuelve a optimizar DIP.

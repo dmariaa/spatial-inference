@@ -107,8 +107,8 @@ async function loadView() {
     }
     const controller = new AbortController();
     state.controller = controller;
-    const timeout = setTimeout(() => controller.abort('timeout'), ui.method.value === 'dip-cnn' ? 300000 : 60000);
-    status(ui.method.value === 'dip-cnn' ? 'Calculando DIP-CNN para esta hora… La primera reconstrucción puede tardar.' : 'Cargando observaciones e interpolación…');
+    const timeout = setTimeout(() => controller.abort('timeout'), ui.method.value === 'dip-cnn' ? 900000 : 60000);
+    status(ui.method.value === 'dip-cnn' ? 'Calculando ensemble DIP-CNN con hasta 24 horas de historial… La primera reconstrucción puede tardar.' : 'Cargando observaciones e interpolación…');
     const params = new URLSearchParams({
         source: ui.source.value,
         magnitude: item.id,
@@ -140,7 +140,7 @@ async function loadView() {
         if (data.constant_field) {
             ui['map-note'].textContent += ' Medidas iguales o una sola celda observada: campo constante.';
         } else if (data.method === 'DIP-CNN' && data.interpolated_count) {
-            ui['map-note'].textContent += ` Una hora, ${data.dip_epochs} iteraciones; última superficie, sin selección por validación.`;
+            ui['map-note'].textContent += ` ${data.dip_details.window_hours} h (${data.dip_details.observed_hours} con medidas), ${data.dip_details.ensemble_size} miembros, ${data.dip_epochs} iteraciones por miembro y ${data.dip_details.validation_cells} celdas de validación aleatorias. Selección por validación; media del ensemble.`;
         }
         ui['value-heading'].textContent = `Valor (${data.unit})`;
         ui.stations.replaceChildren();

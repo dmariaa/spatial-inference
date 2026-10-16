@@ -1,8 +1,9 @@
 """Local METRAQ HTTP API and static frontend."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 import logging
 import numpy as np
+import pandas as pd
 import os
 from pathlib import Path
 from typing import Literal
@@ -11,10 +12,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from metraq_app.data_source import POLLUTANTS, load_catalog, load_sensors, load_measurements
+from metraq_app.data_source import POLLUTANTS, load_catalog, load_sensors, load_measurements, load_history
 from metraq_app.grid import make_grid, aggregate_cells
 from metraq_app.map import build_map
-from metraq_app.interpolation import METHOD_NAMES, reconstruct
+from metraq_app.interpolation import METHOD_NAMES, reconstruct, observation_grid
 
 Source = Literal['files', 'db']
 FRONTEND = Path(__file__).with_name('frontend')
@@ -46,7 +47,25 @@ def observations_for(source, magnitude, timestamp):
 def surface_for(source, magnitude, timestamp, cell_size, method, dip_epochs):
     ctx, sensors = grid_for(source, cell_size)
     cells, _ = aggregate_cells(ctx, sensors, observations_for(source, magnitude, timestamp))
-    return reconstruct(ctx['grid'].shape, cells, method, dip_epochs)
+    details = {'constant_field': False, 'ensemble_size': 0, 'validation_cells': 0}
+    history = None
+    if method == 'dip-cnn' and not cells.empty:
+        first = catalog_for(source).loc[lambda frame: frame.magnitude_id.eq(magnitude)].iloc[0].first_date
+        start = max(timestamp - timedelta(hours=23), first.to_pydatetime())
+        times = pd.date_range(start, timestamp, freq='h')
+        measurements = load_history(source, magnitude, start, timestamp)
+        dates = pd.to_datetime(measurements.entry_date)
+        sequence, masks = [], []
+        for time in times:
+            hourly_cells, _ = aggregate_cells(ctx, sensors, measurements.loc[dates.eq(time)])
+            data, mask = observation_grid(ctx['grid'].shape, hourly_cells)
+            sequence.append(data)
+            masks.append(mask)
+        history = np.stack(sequence), np.stack(masks)
+        details.update(window_hours=len(times), window_start=start.isoformat(),
+                       observed_hours=int(np.stack(masks).any(axis=(1, 2)).sum()))
+    surface = reconstruct(ctx['grid'].shape, cells, method, dip_epochs, history=history, details=details)
+    return surface, details
 
 
 def clear_cache():
@@ -112,8 +131,8 @@ def view(source: Source, magnitude: int, timestamp: datetime,
         ctx, sensors = grid_for(source, cell_size)
         measurements = observations_for(source, magnitude, timestamp)
         cells, stations = aggregate_cells(ctx, sensors, measurements)
-        surface = surface_for(source, magnitude, timestamp, cell_size, method, dip_epochs)
-        constant_field = method != 'observed' and not cells.empty and cells.value.min() == cells.value.max()
+        surface, dip_details = surface_for(source, magnitude, timestamp, cell_size, method, dip_epochs)
+        constant_field = dip_details['constant_field']
         name, unit = POLLUTANTS[magnitude]
         bounds = None if auto_scale else (float(metadata.low), float(metadata.high))
         station_records = [{'id': int(row.sensor_id), 'name': str(row.name), 'value': float(row.value),
@@ -124,7 +143,7 @@ def view(source: Source, magnitude: int, timestamp: datetime,
                 'method': METHOD_NAMES[method],
                 'interpolated_count': int(np.isfinite(surface).sum()) - len(cells),
                 'dip_epochs': dip_epochs if method == 'dip-cnn' and not constant_field and not cells.empty else None,
-                'constant_field': bool(constant_field),
+                'constant_field': bool(constant_field), 'dip_details': dip_details,
                 'stations': station_records, 'cell_count': len(cells),
                 'mean': float(stations.value.mean()) if not stations.empty else None}
     except HTTPException:

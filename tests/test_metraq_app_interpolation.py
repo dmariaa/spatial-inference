@@ -49,3 +49,54 @@ def test_map_distinguishes_estimates_and_observations():
     assert len(estimated) == ctx['grid'].size - 2
     assert all(p.attrib['fill'] != 'none' for p in polygons)
     assert 'Estimación IDW' in estimated[0].find('{http://www.w3.org/2000/svg}title').text
+
+
+def test_dip_validation_cells_never_enter_training_inputs():
+    from metraq_app.interpolation import dip_split
+    data = np.arange(3 * 8 * 8, dtype=np.float32).reshape(3, 8, 8)
+    mask = np.zeros_like(data, dtype=bool)
+    mask[:, 1:5, 1:5] = True
+    mask[1] = False
+    split, count = dip_split(data, mask, np.random.default_rng(1))
+    train, val = split['train_mask'][0], split['val_mask'][0]
+    assert count == 3
+    assert not (train & val).any()
+    assert not (train.any(axis=0) & val.any(axis=0)).any()
+    assert np.array_equal(train | val, mask)
+    assert not split['input_data'][-2:][:, val].any()
+    assert not train[1].any() and not val[1].any()
+    mean, std = split['normalization_stats'][0]
+    assert mean == pytest.approx(data[train].mean())
+    assert std == pytest.approx(data[train].std())
+
+
+@pytest.mark.parametrize('hour, expected_hours', [(2, 3), (30, 24)])
+def test_app_dip_window_is_clipped_and_keeps_missing_hours(monkeypatch, hour, expected_hours):
+    from datetime import datetime, timedelta
+    from metraq_app import app as backend
+    sensors = pd.DataFrame({'id': [1], 'name': ['A'], 'utm_x': [440100.],
+        'utm_y': [4470100.], 'latitude': [40.38], 'longitude': [-3.70]})
+    first = datetime(2024, 1, 1)
+    end = first + timedelta(hours=hour)
+    monkeypatch.setattr(backend, 'load_catalog', lambda source: pd.DataFrame({
+        'magnitude_id': [12], 'first_date': [pd.Timestamp(first)], 'last_date': [pd.Timestamp(end)],
+        'low': [0.], 'high': [100.]}))
+    monkeypatch.setattr(backend, 'load_sensors', lambda *args: sensors)
+    monkeypatch.setattr(backend, 'load_measurements', lambda *args: pd.DataFrame({'sensor_id': [1], 'value': [2.]}))
+    def history(source, magnitude, start, stop):
+        assert stop == end and start == max(first, end - timedelta(hours=23))
+        dates = pd.date_range(start, stop, freq='h').delete(1)
+        return pd.DataFrame({'entry_date': dates, 'sensor_id': 1, 'value': 2.})
+    monkeypatch.setattr(backend, 'load_history', history)
+    def reconstruct(shape, cells, method, epochs, *, history, details):
+        data, mask = history
+        assert len(data) == expected_hours and not mask[1].any() and mask[-1].any()
+        return np.full(shape, 2., dtype=np.float32)
+    monkeypatch.setattr(backend, 'reconstruct', reconstruct)
+    backend.clear_cache()
+    try:
+        surface, details = backend.surface_for('files', 12, end, 1000, 'dip-cnn', 3)
+        assert details['window_hours'] == expected_hours
+        assert details['observed_hours'] == expected_hours - 1
+    finally:
+        backend.clear_cache()
