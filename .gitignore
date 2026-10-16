@@ -381,3 +381,6 @@ ENV/
 /data/
 /wandb/
 /cache/
+
+# Generated videos, figures, metadata and reconstruction/map caches
+/outputs/

@@ -10,6 +10,12 @@ from metraq_gnn.data.graph import (
 from metraq_gnn.data.cache import AQSensorCache, build_aq_sensor_cache, load_aq_sensor_cache
 from metraq_gnn.data.dataset import GraphWindowDataset, SensorGraphWindowDataset
 from metraq_gnn.data.splits import compute_training_normalization, split_sensor_nodes
+from metraq_gnn.data.traffic_cache import (
+    TrafficGridCache,
+    build_traffic_grid_cache,
+    compute_traffic_training_normalization,
+    load_traffic_grid_cache,
+)
 from metraq_gnn.data.window import build_graph_window, split_training_sensor_masks
 
 __all__ = [
@@ -21,10 +27,14 @@ __all__ = [
     "AQSensorCache",
     "GraphWindowDataset",
     "SensorGraphWindowDataset",
+    "TrafficGridCache",
+    "build_traffic_grid_cache",
     "compute_training_normalization",
+    "compute_traffic_training_normalization",
     "grid_to_nodes",
     "nodes_to_grid",
     "load_aq_sensor_cache",
+    "load_traffic_grid_cache",
     "split_training_sensor_masks",
     "split_sensor_nodes",
 ]

@@ -52,3 +52,8 @@ def load_sensors(source, magnitudes):
 def load_measurements(source, magnitude, timestamp):
     return get_aq_backend(dataset="metraq", backend=source).get_measurements(
         start_date=timestamp, end_date=timestamp, magnitudes=[int(magnitude)])
+
+
+def load_history(source, magnitude, start, end):
+    return get_aq_backend(dataset="metraq", backend=source).get_measurements(
+        start_date=start, end_date=end, magnitudes=[int(magnitude)])
