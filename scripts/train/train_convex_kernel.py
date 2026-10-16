@@ -5,11 +5,12 @@ from time import perf_counter
 import click
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import Subset
+from torch_geometric.loader import DataLoader
 from metraq_gnn.data.cache import load_aq_sensor_cache
 from metraq_gnn.data.splits import split_sensor_nodes, compute_training_normalization
-from metraq_gnn.data.kernel_window import CachedKernelDataset, collate_kernel_snapshots
-from metraq_gnn.model.convex_kernel import ConvexGeometricKernel
+from metraq_gnn.data.kernel_window import CachedKernelDataset
+from metraq_gnn.model import ConvexGeometricKernel
 from metraq_gnn.trainer import GNNTrainer
 from metraq_gnn.tracking import WandbLogger
 
@@ -77,8 +78,7 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
     def loader(dataset, maximum, shuffle):
         if maximum is not None:
             dataset = Subset(dataset, range(min(maximum, len(dataset))))
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
-                          collate_fn=collate_kernel_snapshots)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     train_loader = loader(training, max_train_windows, True)
     val_loader = loader(validating, max_validation_windows, False)
     model = ConvexGeometricKernel(mode=mode, cell_size_m=aq.metadata["cell_size_m"])
@@ -89,7 +89,7 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
              validation_mask=validation, test_mask=test,
              sensor_ids=aq.sensor_ids, sensor_node_indices=aq.sensor_node_indices)
     config = dict(epsilon_m=model.epsilon_m, distance_scale_m=model.distance_scale_m,
-                  source_policy="all-current-visible", implementation="batched-snapshots", mode=mode, seed=seed, test_evaluated=False, hours=24,
+                  source_policy="all-current-visible", implementation="pyg-vectorized", mode=mode, seed=seed, test_evaluated=False, hours=24,
                   uses_history=False, train_period="2015-2022", validation_period="2023",
                   train_nodes=np.flatnonzero(train).tolist(),
                   validation_nodes=np.flatnonzero(validation).tolist(),
@@ -143,4 +143,3 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
 
 if __name__ == "__main__":
     main()
-

@@ -1,4 +1,4 @@
-"""Compare complete local training steps, including batch preparation."""
+"""Benchmark the vectorized PyG kernel with GNN histories and cached snapshots."""
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -8,17 +8,17 @@ import click
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader as GraphLoader
 
 from metraq_gnn.data.cache import AQSensorCache, load_aq_sensor_cache
 from metraq_gnn.data.dataset import SensorGraphWindowDataset
 from metraq_gnn.data.graph import build_grid_graph
 from metraq_gnn.data.kernel_window import (
-    CachedKernelDataset, KernelWindowDataset, collate_kernel_snapshots,
+    CachedKernelDataset,
 )
 from metraq_gnn.data.splits import compute_training_normalization, split_sensor_nodes
-from metraq_gnn.model.convex_kernel import ConvexGeometricKernel
+from metraq_gnn.model import ConvexGeometricKernel
 
 
 def synthetic_cache():
@@ -54,19 +54,19 @@ def main(cache, windows, batch_size, repeats, device):
                   normalization_mean=mean, normalization_std=std, seed=42,
                   split_start="2015-01-01", split_end="2022-12-31 23:00")
     begin = perf_counter()
-    old = KernelWindowDataset(SensorGraphWindowDataset(**common))
+    old = SensorGraphWindowDataset(**common)
     old_setup = perf_counter() - begin
     begin = perf_counter()
     new = CachedKernelDataset(**common)
     new_setup = perf_counter() - begin
-    if old.dataset.end_indices != new.end_indices:
+    if old.end_indices != new.end_indices:
         raise ValueError("window selections differ")
     count = min(windows, len(new))
     old_loader = GraphLoader(Subset(old, range(count)), batch_size=batch_size)
-    new_loader = DataLoader(Subset(new, range(count)), batch_size=batch_size,
-                            collate_fn=collate_kernel_snapshots)
-    legacy = ConvexGeometricKernel().to(device)
-    vectorized = deepcopy(legacy).prepare_geometry(
+    new_loader = GraphLoader(Subset(new, range(count)), batch_size=batch_size)
+    history_model = ConvexGeometricKernel().to(device).prepare_geometry(
+        aq.graph.pos, np.flatnonzero(train))
+    snapshot_model = deepcopy(history_model).prepare_geometry(
         aq.graph.pos, np.flatnonzero(train))
     def sync():
         if device == "cuda":
@@ -80,19 +80,20 @@ def main(cache, windows, batch_size, repeats, device):
     # Validate the measured data and predictions before timing either path.
     old_batch = next(iter(old_loader)).to(device)
     new_batch = next(iter(new_loader)).to(device)
-    torch.testing.assert_close(old_batch.kernel_values, new_batch.kernel_values.flatten(0, 1))
-    torch.testing.assert_close(old_batch.target_mask, new_batch.target_mask.flatten(0, 1))
+    torch.testing.assert_close(old_batch.x[:, -1, :len(aq.magnitude_ids)],
+                               new_batch.x[:, -1, :len(aq.magnitude_ids)])
+    torch.testing.assert_close(old_batch.target_mask, new_batch.target_mask)
     with torch.no_grad():
         torch.testing.assert_close(
-            legacy(old_batch), vectorized(new_batch).flatten(0, 1),
+            history_model(old_batch), snapshot_model(new_batch),
             rtol=3e-5, atol=3e-6)
     # Warm up both execution paths before timing, with identical data.
-    step(legacy, next(iter(old_loader)))
-    step(vectorized, next(iter(new_loader)))
+    step(history_model, next(iter(old_loader)))
+    step(snapshot_model, next(iter(new_loader)))
     measurements = {}
     for name, model, loader, setup in (
-        ("original", legacy, old_loader, old_setup),
-        ("optimized", vectorized, new_loader, new_setup),
+        ("gnn_histories", history_model, old_loader, old_setup),
+        ("cached_snapshots", snapshot_model, new_loader, new_setup),
     ):
         times = []
         for _ in range(repeats):
@@ -106,7 +107,7 @@ def main(cache, windows, batch_size, repeats, device):
             setup_seconds=setup, median_seconds=float(np.median(times)),
             windows_per_second=count/float(np.median(times)), seconds=times)
     measurements["speedup"] = (
-        measurements["original"]["median_seconds"] / measurements["optimized"]["median_seconds"])
+        measurements["gnn_histories"]["median_seconds"] / measurements["cached_snapshots"]["median_seconds"])
     measurements.update(device=device, windows=count, batch_size=batch_size,
                         synthetic=cache is None, repeats=repeats)
     click.echo(json.dumps(measurements, indent=2))

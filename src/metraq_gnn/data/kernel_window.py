@@ -1,69 +1,11 @@
-"""Current-hour AQ snapshots and lightweight batches for convex interpolation."""
-from dataclasses import dataclass, fields
-
+"""Preloaded current-hour AQ samples in the standard PyG Data format."""
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from torch_geometric.data import Data
 
 from metraq_gnn.data.window import split_training_sensor_masks
-
-
-def adapt_kernel_window(sample):
-    """Compatibility adapter for the original graph-window implementation."""
-    result = sample.clone()
-    channels = sample.context_mask.shape[-1]
-    result.kernel_values = sample.x[:, -1, :channels].clone()
-    result.kernel_available = sample.context_mask[:, -1, :].clone()
-    if torch.any(result.kernel_available & sample.target_mask):
-        raise ValueError("target AQ cannot be visible")
-    if torch.any(result.kernel_available & sample.forbidden_context_mask[:, None]):
-        raise ValueError("forbidden AQ cannot be visible")
-    if not result.kernel_available.any(dim=0).all():
-        raise ValueError("no current visible AQ sources for a sample/channel")
-    return result
-
-
-class KernelWindowDataset(Dataset):
-    """Original graph adapter, retained for compatibility and equivalence checks."""
-    def __init__(self, dataset):
-        self.dataset = dataset
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, index):
-        return adapt_kernel_window(self.dataset[index])
-
-    def set_epoch(self, epoch):
-        self.dataset.set_epoch(epoch)
-
-
-@dataclass
-class KernelBatch:
-    kernel_values: torch.Tensor
-    kernel_available: torch.Tensor
-    y: torch.Tensor
-    target_mask: torch.Tensor
-    window_end_ns: torch.Tensor
-
-    def to(self, device, non_blocking=False):
-        return type(self)(**{
-            field.name: getattr(self, field.name).to(device, non_blocking=non_blocking)
-            for field in fields(self)
-        })
-
-    def pin_memory(self):
-        return type(self)(**{
-            field.name: getattr(self, field.name).pin_memory() for field in fields(self)
-        })
-
-
-def collate_kernel_snapshots(samples):
-    return KernelBatch(**{
-        field.name: torch.stack([getattr(sample, field.name) for sample in samples])
-        for field in fields(KernelBatch)
-    })
 
 
 class CachedKernelDataset(Dataset):
@@ -147,6 +89,8 @@ class CachedKernelDataset(Dataset):
         if not len(ends):
             raise ValueError("split contains no complete windows with valid targets")
 
+        self.positions = cache.graph.pos
+        self.forbidden = torch.from_numpy(forbidden.copy()).reshape(-1)
         self.end_indices = (ends + first).tolist()
         self.window_end_times = times[self.end_indices]
         # Keep only eligible endpoints; sample access performs no cache I/O.
@@ -182,10 +126,18 @@ class CachedKernelDataset(Dataset):
         if not source_mask.any(dim=0).all():
             raise ValueError("no current visible AQ sources for a sample/channel")
         target_mask = available & target.reshape(-1, 1)
-        return KernelBatch(
-            kernel_values=torch.where(source_mask, values, 0.),
-            kernel_available=source_mask,
+        visible_values = torch.where(source_mask, values, 0.)
+        return Data(
+            x=torch.cat((visible_values, source_mask.float()), dim=-1).unsqueeze(1),
+            context_mask=source_mask.unsqueeze(1),
+            pos=self.positions,
             y=values,
             target_mask=target_mask,
+            context_sensor_mask=context.reshape(-1),
+            target_sensor_mask=target.reshape(-1),
+            forbidden_context_mask=self.forbidden,
             window_end_ns=torch.tensor(self.window_end_times[index].value, dtype=torch.int64),
+            window_index=torch.tensor(index, dtype=torch.int64),
+            num_nodes=self.node_count,
+            grid_shape=self.grid_shape,
         )

@@ -98,3 +98,7 @@ def main(fixed_run, fixed_test, power_run, power_test, neural_run, neural_test, 
                    note="Same sources, geometry, seed, masks and normalization. Selection uses validation only; this is not the ten-group benchmark.")
     (output/"summary.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
     click.echo(frame.to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

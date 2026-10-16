@@ -1,6 +1,13 @@
 import pandas as pd
 import pytest
-from metraq_gnn.kernel_comparison import align_predictions
+import importlib.util
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "kernel_comparison", Path(__file__).resolve().parents[1] / "scripts/evaluation/kernel_comparison.py")
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+align_predictions = _module.align_predictions
 
 
 def test_alignment_rejects_different_targets_or_keys():
