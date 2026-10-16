@@ -177,5 +177,3 @@ def main(month,output,seconds,fps):
     (output/'metadata.json').write_text(json.dumps(meta,indent=2,ensure_ascii=False),encoding='utf-8')
     click.echo(str(path.resolve()))
 if __name__=='__main__':main()
-
-
