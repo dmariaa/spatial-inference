@@ -31,7 +31,7 @@ run_group() {
     CUDA_VISIBLE_DEVICES="$gpu_index" \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH="$project_dir/src" \
-        "$python_bin" scripts/train_gnn_cached.py \
+        "$python_bin" scripts/train/train_gnn_cached.py \
         --cache cache/metraq/no2-2010-2024 \
         --traffic-cache cache/metraq/traffic-intensity-2015-2024 \
         --output "output/gnn/dip-matched-traffic/group-$group" \

@@ -16,6 +16,11 @@ uv_bin="/home/dmariaa/.local/bin/uv"
 run_group() {
     local group="$1"
     shift
+    local test_sensor_args=()
+    local sensor_id
+    for sensor_id in "$@"; do
+        test_sensor_args+=(--test-sensor-ids "$sensor_id")
+    done
     local output="$output_root/group-$group"
     mkdir -p "$output"
     if [[ -f "$output/summary.json" ]]; then
@@ -24,7 +29,7 @@ run_group() {
     fi
     echo "starting group-$group on GPU $gpu_index: $*"
     CUDA_VISIBLE_DEVICES="$gpu_index" PYTHONUNBUFFERED=1 "$uv_bin" run python \
-        scripts/train_gnn_cached.py \
+        scripts/train/train_gnn_cached.py \
         --cache cache/metraq/no2-2010-2024 \
         --output "output/gnn/dip-matched-pilot/group-$group" \
         --architecture sensor-to-grid \
@@ -38,7 +43,7 @@ run_group() {
         --mixed-precision \
         --patience 20 \
         --device cuda \
-        --test-sensor-ids "$@" \
+        "${test_sensor_args[@]}" \
         --test-windows-index "output/gnn/dip-matched-pilot/dip-index.npz" \
         --wandb \
         --wandb-project metraq-gnn-test \
