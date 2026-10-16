@@ -182,6 +182,25 @@ class IdwInterpolator(Interpolator):
         self.max_radius_m = max_radius_m
         self.eps = float(eps)
 
+    @classmethod
+    def from_points(cls, x, y, values, *, power=2., k=8, max_radius_m=None, eps=1e-12):
+        """Use the same IDW algorithm with explicit, consistently scaled coordinates."""
+        x, y, values = (np.asarray(a, dtype=float) for a in (x, y, values))
+        if x.ndim != 1 or not len(x) or x.shape != y.shape or x.shape != values.shape:
+            raise ValueError("point coordinates and values must be matching nonempty vectors")
+        if not all(np.isfinite(a).all() for a in (x, y, values)):
+            raise ValueError("point coordinates and values must be finite")
+        if not np.isfinite(power) or power <= 0 or k < 1 or not np.isfinite(eps) or eps <= 0:
+            raise ValueError("IDW power, k and epsilon must be positive")
+        if max_radius_m is not None and (not np.isfinite(max_radius_m) or max_radius_m <= 0):
+            raise ValueError("IDW radius must be finite and positive")
+        result = cls.__new__(cls)
+        result.x, result.y, result.z = x, y, values
+        result.tree = cKDTree(np.c_[x, y])
+        result.power, result.k = float(power), min(int(k), len(values))
+        result.max_radius_m, result.eps = max_radius_m, float(eps)
+        return result
+
     def _predict_points(self, x_t, y_t):
         pts = np.c_[np.asarray(x_t, float).ravel(), np.asarray(y_t, float).ravel()]
         if self.k == 0 or len(self.z) == 0:

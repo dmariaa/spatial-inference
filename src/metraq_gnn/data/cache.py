@@ -227,4 +227,37 @@ def _write_metadata(path: Path, metadata: dict) -> None:
     temporary.replace(path)
 
 
-__all__ = ["AQSensorCache", "build_aq_sensor_cache", "load_aq_sensor_cache"]
+def rebuild_and_validate_grid(aq_cache: AQSensorCache, aq_backend: AQBackend | None = None,
+                              *, sensors: pd.DataFrame | None = None) -> dict:
+    """Reconstruct the cached grid from its original AQ station catalogue."""
+    if sensors is None:
+        if aq_backend is None:
+            raise ValueError("provide sensors or aq_backend")
+        sensors = aq_backend.get_sensors(magnitudes=[int(v) for v in aq_cache.magnitude_ids])
+    else:
+        sensors = sensors[sensors["id"].isin(aq_cache.sensor_ids)].copy()
+    if sensors["id"].duplicated().any():
+        raise ValueError("sensor catalogue contains duplicate IDs")
+    sensors = sensors.sort_values("id")
+    grid_ctx = prepare_grid_context(
+        sensors,
+        cell_size_m=int(aq_cache.metadata["cell_size_m"]),
+        margin_m_x=int(aq_cache.metadata["margin_m_x"]),
+        margin_m_y=int(aq_cache.metadata["margin_m_y"]),
+    )
+    if tuple(grid_ctx["grid"].shape) != aq_cache.grid_shape:
+        raise ValueError("reconstructed grid shape does not match AQ cache")
+    sensor_ids = sensors["id"].to_numpy(dtype=np.int64)
+    rows, cols, mapped = map_sensor_ids_to_grid(grid_ctx, sensors, sensor_ids)
+    nodes = rows * aq_cache.grid_shape[1] + cols
+    if (
+        not mapped.all()
+        or not np.array_equal(sensor_ids, np.asarray(aq_cache.sensor_ids))
+        or not np.array_equal(nodes, np.asarray(aq_cache.sensor_node_indices))
+    ):
+        raise ValueError("reconstructed grid does not reproduce AQ sensor mapping")
+    return grid_ctx
+
+
+__all__ = ["AQSensorCache", "build_aq_sensor_cache", "load_aq_sensor_cache",
+           "rebuild_and_validate_grid"]

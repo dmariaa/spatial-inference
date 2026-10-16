@@ -1,4 +1,4 @@
-"""Matched pilot ablation: fixed IDW, learned exponent and neural correction."""
+"""Matched pilot ablation with optional learned-power directional wind."""
 import hashlib
 import json
 from pathlib import Path
@@ -30,23 +30,35 @@ def align_predictions(reference, candidate):
 @click.option("--power-test", required=True, type=click.Path(exists=True, path_type=Path))
 @click.option("--neural-run", required=True, type=click.Path(exists=True, path_type=Path))
 @click.option("--neural-test", required=True, type=click.Path(exists=True, path_type=Path))
+@click.option("--wind-run", type=click.Path(exists=True, path_type=Path))
+@click.option("--wind-test", type=click.Path(exists=True, path_type=Path))
 @click.option("--output", required=True, type=click.Path(path_type=Path))
-def main(fixed_run, fixed_test, power_run, power_test, neural_run, neural_test, output):
+def main(fixed_run, fixed_test, power_run, power_test, neural_run, neural_test, output, wind_run, wind_test):
     if output.exists():
         raise click.ClickException("comparison output already exists")
+    if (wind_run is None) != (wind_test is None):
+        raise click.UsageError("provide both --wind-run and --wind-test")
     def read(path):
         return json.loads(path.read_text())
     base_config = read(neural_run / "config.json")
     base_predictions = pd.read_csv(neural_test / "predictions.csv", parse_dates=["window_end"])
     rows, per_sensor, per_window = [], [], []
-    for mode, run, evaluation in (
+    variants = [
         ("fixed", fixed_run, fixed_test), ("power", power_run, power_test),
         ("neural", neural_run, neural_test),
-    ):
+    ]
+    if wind_run is not None:
+        variants.append(("power-wind", wind_run, wind_test))
+    for mode, run, evaluation in variants:
         config, training = read(run/"config.json"), read(run/"summary.json")
         test = read(evaluation/"summary.json")
-        if config["mode"] != mode:
-            raise ValueError("unexpected model mode")
+        expected_mode = "power" if mode == "power-wind" else mode
+        expected_wind = "directional" if mode == "power-wind" else "none"
+        if config["mode"] != expected_mode or config.get("wind_mode", "none") != expected_wind:
+            raise ValueError("unexpected model mode or wind mode")
+        if mode == "power-wind" and (not config.get("wind_cache_fingerprint") or
+                test.get("wind_cache_fingerprint") != config["wind_cache_fingerprint"]):
+            raise ValueError("evaluation wind cache differs from training")
         for name in ("hours", "train_period", "validation_period", "seed",
                      "cell_size_m", "train_nodes", "validation_nodes", "test_sensor_ids",
                      "normalization_mean", "normalization_std"):
@@ -64,7 +76,7 @@ def main(fixed_run, fixed_test, power_run, power_test, neural_run, neural_test, 
             raise ValueError("evaluation checkpoint differs from validation selection")
         predictions = pd.read_csv(evaluation/"predictions.csv", parse_dates=["window_end"])
         aligned = align_predictions(base_predictions, predictions)
-        # Use the same canonical targets across all three methods.
+        # Use the same canonical targets across all methods.
         error = aligned["prediction_candidate"].to_numpy()-aligned["target_ref"].to_numpy()
         target = aligned["target_ref"].to_numpy()
         if not np.isfinite(error).all() or not len(error):
@@ -74,6 +86,7 @@ def main(fixed_run, fixed_test, power_run, power_test, neural_run, neural_test, 
         for key, stored in (("mae","test_mae_physical"),("rmse","test_rmse_physical"),("wape","test_wape")):
             np.testing.assert_allclose(metrics[key], test[stored], atol=1e-6, rtol=1e-6)
         rows.append(dict(mode=mode, power=training["power"],
+                         wind_mode=expected_wind, wind_strength=training.get("wind_strength", 0.),
                          best_epoch=training["best_epoch"]+1 if mode != "fixed" else None,
                          epochs_completed=training["epochs_completed"],
                          validation_mae=training["best_validation_mae"],

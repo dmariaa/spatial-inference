@@ -17,6 +17,7 @@ from metraq_gnn.data import (
     split_sensor_nodes,
 )
 from metraq_gnn.data.kernel_window import CachedKernelDataset
+from metraq_gnn.data.wind_cache import load_wind_source_cache
 from metraq_gnn.evaluation import (
     collect_sensor_predictions, summarize_all_predictions, summarize_sensor_predictions,
 )
@@ -71,7 +72,7 @@ def load_partition(run_dir, aq, config):
     return masks, test_ids
 
 
-def prepare_dataset(model_kind, aq, config, masks, traffic_cache):
+def prepare_dataset(model_kind, aq, config, masks, traffic_cache, wind_cache=None):
     """Prepare architecture-specific features with the same evaluation masks."""
     train, validation, test = masks
     options = dict(
@@ -83,7 +84,20 @@ def prepare_dataset(model_kind, aq, config, masks, traffic_cache):
     if model_kind == "convex-kernel":
         if traffic_cache is not None:
             raise click.ClickException("convex kernel has no traffic features; omit --traffic-cache")
-        return CachedKernelDataset(**options)
+        active = config.get("wind_mode", "none") == "directional"
+        path = wind_cache or config.get("wind_cache")
+        if not active and path is not None:
+            raise click.ClickException("this kernel has no wind features; omit --wind-cache")
+        wind = None
+        if active:
+            if path is None or not Path(path).is_dir():
+                raise click.ClickException("this kernel requires its wind cache; provide --wind-cache")
+            wind = load_wind_source_cache(path)
+            if wind.metadata["fingerprint"] != config.get("wind_cache_fingerprint"):
+                raise click.ClickException("wind cache identity differs from training")
+        return CachedKernelDataset(**options, wind_cache=wind)
+    if wind_cache is not None:
+        raise click.ClickException("GNN wind features are not implemented; omit --wind-cache")
     if traffic_cache is None and config.get("traffic_cache"):
         raise click.ClickException("this GNN was trained with traffic; provide --traffic-cache")
     return SensorGraphWindowDataset(
@@ -96,7 +110,12 @@ def prepare_dataset(model_kind, aq, config, masks, traffic_cache):
 def build_model(model_kind, aq, config, masks, sample):
     """Only architecture construction differs; checkpoint loading is shared."""
     if model_kind == "convex-kernel":
-        model = ConvexGeometricKernel(mode=config["mode"], cell_size_m=config["cell_size_m"])
+        model = ConvexGeometricKernel(
+            mode=config["mode"], cell_size_m=config["cell_size_m"],
+            epsilon_m=config.get("epsilon_m", 1.), distance_scale_m=config.get("distance_scale_m", 1000.),
+            wind_mode=config.get("wind_mode", "none"),
+            wind_speed_scale_m_s=config.get("wind_speed_scale_m_s", 1.),
+            initial_wind_strength=config.get("initial_wind_strength", .01))
         context = masks[0] | masks[1]
         model.prepare_geometry(aq.graph.pos, np.unique(aq.sensor_node_indices[
             context.reshape(-1)[aq.sensor_node_indices]]))
@@ -134,6 +153,7 @@ def validate_reference(reference, config, aq, masks, test_windows_index):
 @click.option("--run-dir", type=click.Path(path_type=Path, exists=True, file_okay=False), required=True)
 @click.option("--cache", type=click.Path(path_type=Path, exists=True, file_okay=False), required=True)
 @click.option("--traffic-cache", type=click.Path(path_type=Path, exists=True, file_okay=False))
+@click.option("--wind-cache", type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--test-windows-index", type=click.Path(path_type=Path, exists=True, dir_okay=False))
 @click.option("--output", type=click.Path(path_type=Path))
 @click.option("--batch-size", type=click.IntRange(min=1), default=64)
@@ -141,7 +161,7 @@ def validate_reference(reference, config, aq, masks, test_windows_index):
 @click.option("--pin-memory/--no-pin-memory", default=None)
 @click.option("--device")
 def main(run_dir, cache, traffic_cache, test_windows_index, output, batch_size,
-         num_workers, pin_memory, device, model_kind, reference_summary):
+         num_workers, pin_memory, device, model_kind, reference_summary, wind_cache):
     """Evaluate a frozen GNN or kernel on all or selected 2024 windows.
 
     Both models write predictions.csv, by-sensor.csv and summary.json in a new
@@ -170,7 +190,7 @@ def main(run_dir, cache, traffic_cache, test_windows_index, output, batch_size,
     reference = json.loads(reference_summary.read_text()) if reference_summary else None
     if reference is not None:
         validate_reference(reference, config, aq, masks, test_windows_index)
-    dataset = prepare_dataset(model_kind, aq, config, masks, traffic_cache)
+    dataset = prepare_dataset(model_kind, aq, config, masks, traffic_cache, wind_cache)
     test_data = selected_test_windows(dataset, index_path=test_windows_index) if test_windows_index else dataset
     if not len(test_data):
         raise click.ClickException("no TEST windows selected")
@@ -200,6 +220,8 @@ def main(run_dir, cache, traffic_cache, test_windows_index, output, batch_size,
         raise click.ClickException("checkpoint changed during evaluation")
     method = (f"CONVEX_KERNEL_{config['mode'].upper()}" if model_kind == "convex-kernel"
               else "GNN_TRAFFIC" if traffic_cache else "GNN")
+    if model_kind == "convex-kernel" and config.get("wind_mode", "none") == "directional":
+        method += "_WIND_DIRECTIONAL"
     predictions.insert(0, "sensor_group", "-".join(str(value) for value in sorted(test_ids)))
     predictions.insert(4, "method", method)
     metrics = summarize_all_predictions(predictions)
@@ -208,6 +230,11 @@ def main(run_dir, cache, traffic_cache, test_windows_index, output, batch_size,
                    checkpoint_sha256=checkpoint_hash, context="TRAIN+VALIDATION", period="2024",
                    test_evaluated=True, test_windows_index=str(test_windows_index) if test_windows_index else None,
                    reference_summary=str(reference_summary) if reference_summary else None)
+    if model_kind == "convex-kernel":
+        summary.update(wind_mode=config.get("wind_mode", "none"),
+                       wind_cache_fingerprint=config.get("wind_cache_fingerprint"),
+                       wind_available_fraction=dataset.wind_coverage,
+                       wind_strength=float(model.wind_strength.detach().cpu()))
     if reference is not None:
         summary["reference_metrics"] = {key: reference[key] for key in
             ("test_mae_physical", "test_rmse_physical", "test_wape")}

@@ -8,12 +8,27 @@ from torch_geometric.data import Data
 
 class ConvexGeometricKernel(nn.Module):
     def __init__(self, *, mode="neural", cell_size_m=1000., distance_scale_m=1000.,
-                 epsilon_m=1., hidden_channels=16):
+                 epsilon_m=1., hidden_channels=16, wind_mode="none",
+                 wind_speed_scale_m_s=1., initial_wind_strength=.01):
         super().__init__()
         if mode not in {"fixed", "power", "neural"}:
             raise ValueError("mode must be fixed, power or neural")
         if min(cell_size_m, distance_scale_m, epsilon_m) <= 0:
             raise ValueError("distance scales must be positive")
+        if wind_mode not in {"none", "directional"}:
+            raise ValueError("wind_mode must be none or directional")
+        if not math.isfinite(wind_speed_scale_m_s) or wind_speed_scale_m_s <= 0:
+            raise ValueError("wind speed scale must be finite and positive")
+        if not math.isfinite(initial_wind_strength) or initial_wind_strength <= 0:
+            raise ValueError("initial wind strength must be finite and positive")
+        self.wind_mode = wind_mode
+        self.wind_speed_scale_m_s = float(wind_speed_scale_m_s)
+        if wind_mode == "directional":
+            self.raw_wind_strength = nn.Parameter(torch.tensor(
+                initial_wind_strength + math.log(-math.expm1(-initial_wind_strength))))
+        else:
+            # Preserve strict loading of existing checkpoints.
+            self.register_parameter("raw_wind_strength", None)
         self.mode = mode
         self.cell_size_m = float(cell_size_m)
         self.distance_scale_m = float(distance_scale_m)
@@ -30,6 +45,7 @@ class ConvexGeometricKernel(nn.Module):
         self.register_buffer("_geometry_log_distance", torch.empty(0), persistent=False)
         self.register_buffer("_geometry_features", torch.empty(0), persistent=False)
         self.register_buffer("_geometry_sources", torch.empty(0, dtype=torch.long), persistent=False)
+        self.register_buffer("_geometry_direction", torch.empty(0), persistent=False)
         self._geometry_node_count = 0
 
     def prepare_geometry(self, positions, source_nodes):
@@ -52,6 +68,9 @@ class ConvexGeometricKernel(nn.Module):
             (distances + self.epsilon_m) / self.distance_scale_m)
         self._geometry_features = torch.log1p(
             distances / self.distance_scale_m).unsqueeze(-1)
+        if self.wind_mode == "directional":
+            displacement = (positions[:, None, :] - positions[sources][None, :, :]) * self.cell_size_m
+            self._geometry_direction = displacement / (distances[..., None] + self.epsilon_m)
         self._geometry_sources = sources
         self._geometry_node_count = len(positions)
         return self
@@ -59,6 +78,29 @@ class ConvexGeometricKernel(nn.Module):
     @property
     def power(self):
         return torch.nn.functional.softplus(self.raw_power)
+
+    @property
+    def wind_strength(self):
+        if self.raw_wind_strength is None:
+            return self.raw_power.new_zeros(())
+        return torch.nn.functional.softplus(self.raw_wind_strength)
+
+    def _wind_scores(self, data, batch_size):
+        nodes = self._geometry_node_count
+        wind, mask = getattr(data, "wind_uv", None), getattr(data, "wind_available", None)
+        if wind is None or mask is None:
+            raise ValueError("directional kernel requires wind_uv and wind_available")
+        if wind.shape != (batch_size * nodes, 2) or mask.shape != (batch_size * nodes,):
+            raise ValueError("wind must have shape (nodes, 2) with a node availability mask")
+        wind = wind.reshape(batch_size, nodes, 2)[:, self._geometry_sources]
+        mask = mask.bool().reshape(batch_size, nodes)[:, self._geometry_sources]
+        if (mask & ~torch.isfinite(wind).all(dim=-1)).any():
+            raise ValueError("available wind vectors must be finite")
+        wind = torch.where(mask[..., None], wind, 0.)
+        velocity = wind / (torch.linalg.vector_norm(wind, dim=-1, keepdim=True)
+                           + self.wind_speed_scale_m_s)
+        alignment = torch.einsum("nsd,bsd->bns", self._geometry_direction, velocity)
+        return self.wind_strength * alignment
 
     def forward(self, data: Data, *, return_weights=False):
         """Read final-hour visible AQ and return concatenated (nodes, pollutants)."""
@@ -102,8 +144,10 @@ class ConvexGeometricKernel(nn.Module):
         scores = -self.power * self._geometry_log_distance
         if self.mode == "neural":
             scores = scores + self.correction(self._geometry_features).squeeze(-1)
-        logits = scores[None, None, :, :].masked_fill(
-            ~source_mask[:, :, None, :], -torch.inf)
+        scores = scores[None, None, :, :]
+        if self.wind_mode == "directional":
+            scores = scores + self._wind_scores(data, batch_size)[:, None, :, :]
+        logits = scores.masked_fill(~source_mask[:, :, None, :], -torch.inf)
         alpha = logits.softmax(dim=-1)
         source_values = values[:, self._geometry_sources, :].permute(0, 2, 1)
         source_values = torch.where(source_mask, source_values, 0.)
