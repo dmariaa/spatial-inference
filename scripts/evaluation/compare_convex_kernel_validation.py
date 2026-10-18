@@ -190,4 +190,3 @@ def main(without_wind_run, with_wind_run, cache, wind_cache, output, batch_size,
 
 if __name__ == "__main__":
     main()
-

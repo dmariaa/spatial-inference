@@ -90,4 +90,3 @@ def test_frozen_validation_comparison_is_paired_and_test_independent(tmp_path,mo
     (folders[1]/"config.json").write_text(json.dumps(bad))
     result=CliRunner().invoke(comparison.main,args+["--output",str(tmp_path/"rejected")])
     assert result.exit_code!=0 and "protocols differ: seed" in result.output
-
