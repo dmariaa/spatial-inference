@@ -85,7 +85,47 @@ def load_matched(gnn_root: Path, reference_path: Path) -> pd.DataFrame:
     return combined
 
 
-def build_comparison(combined: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def append_matched_candidate(combined: pd.DataFrame, candidate: pd.DataFrame,
+                             method: str) -> pd.DataFrame:
+    """Add a frozen model using the historical DIP targets as canonical truth."""
+    candidate = candidate.copy()
+    candidate["sensor_group"] = candidate["sensor_group"].astype(str)
+    candidate["window_end"] = pd.to_datetime(candidate["window_end"])
+    candidate["sensor_id"] = candidate["sensor_id"].astype("int64")
+    if method in combined["method"].unique() or set(candidate["method"]) != {method}:
+        raise click.ClickException("unexpected or already included candidate method")
+    if candidate.duplicated(KEYS).any():
+        raise click.ClickException("candidate contains duplicate matched keys")
+    canonical = combined.loc[combined.method == "DIP", KEYS + ["target"]].copy()
+    canonical["window_end"] = pd.to_datetime(canonical["window_end"])
+    canonical["sensor_group"] = canonical["sensor_group"].astype(str)
+    aligned = candidate.merge(canonical.rename(columns={"target": "canonical_target"}),
+                              on=KEYS, how="outer", validate="one_to_one", indicator=True)
+    if not aligned["_merge"].eq("both").all():
+        raise click.ClickException("candidate keys differ from historical benchmark")
+    values = aligned[["target", "canonical_target", "prediction"]].to_numpy()
+    if not np.isfinite(values).all():
+        raise click.ClickException("candidate contains non-finite targets or predictions")
+    # Inverting float32 normalization can differ by one ULP at high concentrations.
+    tolerance = 1e-5 + np.finfo(np.float32).eps * aligned["canonical_target"].abs()
+    if ((aligned["target"] - aligned["canonical_target"]).abs() > tolerance).any():
+        raise click.ClickException("candidate targets differ materially from historical targets")
+    aligned["target"] = aligned.pop("canonical_target")
+    aligned["error"] = aligned["prediction"] - aligned["target"]
+    aligned["absolute_error"] = aligned["error"].abs()
+    aligned["squared_error"] = aligned["error"] ** 2
+    return pd.concat([combined, aligned[combined.columns]], ignore_index=True)
+
+
+def load_kernel_matched(combined: pd.DataFrame, kernel_root: Path) -> pd.DataFrame:
+    files = sorted(kernel_root.glob("group-*/test/predictions.csv"))
+    if len(files) != 10:
+        raise click.ClickException(f"expected 10 kernel prediction files, found {len(files)}")
+    candidate = pd.concat((pd.read_csv(path) for path in files), ignore_index=True)
+    return append_matched_candidate(combined, candidate, "CONVEX_KERNEL_POWER_WIND_DIRECTIONAL")
+
+
+def build_comparison(combined: pd.DataFrame, *, candidate_method: str = "GNN_TRAFFIC") -> dict[str, pd.DataFrame]:
     overall = summarize(combined, ["method"])
     by_group = summarize(combined, ["sensor_group", "method"])
     by_case = summarize(combined, ["sensor_group", "window_end", "method"])
@@ -93,15 +133,18 @@ def build_comparison(combined: pd.DataFrame) -> dict[str, pd.DataFrame]:
         index=["sensor_group", "window_end"], columns="method", values="mae"
     )
     paired = []
-    for comparator in METHODS[:-1]:
-        delta = pivot["GNN_TRAFFIC"] - pivot[comparator]
+    prefix = "gnn" if candidate_method == "GNN_TRAFFIC" else "candidate"
+    comparators = [method for method in METHODS if method != candidate_method]
+    comparators += sorted(set(combined["method"]) - set(METHODS) - {candidate_method})
+    for comparator in comparators:
+        delta = pivot[candidate_method] - pivot[comparator]
         paired.append(
             {
                 "comparator": comparator,
                 "cases": len(delta),
-                "gnn_wins": int((delta < 0).sum()),
+                f"{prefix}_wins": int((delta < 0).sum()),
                 "ties": int((delta == 0).sum()),
-                "gnn_losses": int((delta > 0).sum()),
+                f"{prefix}_losses": int((delta > 0).sum()),
                 "mean_mae_delta": delta.mean(),
                 "median_mae_delta": delta.median(),
             }
@@ -114,4 +157,5 @@ def build_comparison(combined: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
-__all__ = ["KEYS", "METHODS", "build_comparison", "load_matched", "summarize"]
+__all__ = ["KEYS", "METHODS", "append_matched_candidate", "build_comparison",
+           "load_kernel_matched", "load_matched", "summarize"]
