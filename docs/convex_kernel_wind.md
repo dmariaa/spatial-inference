@@ -111,3 +111,33 @@ Las pruebas incluyen dirección/signo, lotes CPU/CUDA, calma/ausencia, compatibi
 de checkpoints, pares u/v completos, procedencia, cobertura, identidad de caché
 y un entrenamiento sintético con evaluación común y etiquetas TEST alteradas.
 Estos comandos no publican resultados ni lanzan tareas en la DGX.
+
+
+## Comparación controlada con TRAIN 2019–2022
+
+La opción `--train-start 2019-01-01` restringe tanto las ventanas de entrenamiento
+como la media y desviación calculadas con sus celdas TRAIN. El resumen GNN
+anterior se utiliza para recuperar la partición; su normalización 2015–2022
+no se reutiliza al cambiar el periodo. Las fechas y este hecho quedan en config.json.
+
+Ejecutar dos pilotos `--mode power`, uno con `--wind-mode none` y otro con
+`--wind-mode directional --wind-cache cache/metraq/wind-kriging-direct-2015-2024`.
+Ambos utilizan el mismo resumen de partición, semilla 312537310, batch 64,
+hasta 100 épocas, paciencia 20 y validación 2023. El parámetro beta inicial sigue
+en 0.01; no se cambia al mejor valor observado en el diagnóstico.
+
+Los dos usan la misma implementación PyG. Las únicas diferencias son la entrada
+de viento y su parámetro beta. No se lanzan simultáneamente en la misma GPU.
+
+Después se comparan los checkpoints seleccionados por validación:
+
+```powershell
+uv run python scripts/evaluation/compare_convex_kernel_validation.py --without-wind-run output/convex-kernel/pilot-power-nowind-2019-20261018 --with-wind-run output/convex-kernel/pilot-power-wind-2019-20261018 --cache cache/metraq/no2-2010-2024 --wind-cache cache/metraq/wind-kriging-direct-2015-2024 --device cuda --output output/convex-kernel/comparison-power-wind-2019-20261018
+```
+
+El comparador reutiliza el recolector común de predicciones, mantiene exclusivamente
+AQ TRAIN como contexto y calcula MAE, RMSE y WAPE en los mismos targets de 2023.
+Valida fechas, parámetros, normalización, particiones, claves y checkpoints;
+guarda comparison.csv, by-sensor.csv, predicciones de validación y summary.json.
+La comparación usa validación ya empleada para seleccionar los checkpoints y
+sigue siendo un solo piloto. No evalúa TEST ni publica registros W&B.

@@ -4,6 +4,7 @@ from pathlib import Path
 from time import perf_counter
 import click
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
@@ -30,6 +31,10 @@ from metraq_gnn.tracking import WandbLogger
               help="Recover the exact split from a previous GNN summary.")
 @click.option("--validation-nodes", type=click.IntRange(min=1), default=4)
 @click.option("--seed", type=int, default=None, help="Optional reproducibility seed; otherwise random.")
+@click.option("--train-start", default="2015-01-01",
+              help="First TRAIN hour; normalization uses the same TRAIN interval.")
+@click.option("--train-end", default="2022-12-31 23:00",
+              help="Last TRAIN hour, strictly before validation 2023.")
 @click.option("--epochs", type=click.IntRange(min=1), default=100)
 @click.option("--batch-size", type=click.IntRange(min=1), default=16)
 @click.option("--max-train-windows", type=click.IntRange(min=1))
@@ -43,16 +48,27 @@ from metraq_gnn.tracking import WandbLogger
 def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
          batch_size, max_train_windows, max_validation_windows, device, partition_summary,
          wandb, wandb_project, wandb_entity, wandb_name, wandb_mode,
-         wind_mode, wind_cache, wind_speed_scale_m_s, initial_wind_strength):
+         wind_mode, wind_cache, wind_speed_scale_m_s, initial_wind_strength, train_start, train_end):
     started = perf_counter()
     if output.exists():
         raise click.ClickException("output already exists; use a new directory")
+    try:
+        train_start, train_end = pd.Timestamp(train_start), pd.Timestamp(train_end)
+    except (ValueError, TypeError):
+        raise click.UsageError("TRAIN dates must be valid timestamps") from None
+    if (pd.isna(train_start) or pd.isna(train_end) or train_start.tz is not None or train_end.tz is not None
+            or train_start.floor("h") != train_start or train_end.floor("h") != train_end):
+        raise click.UsageError("TRAIN dates must be timezone-naive and hour-aligned")
+    if train_start > train_end or train_end >= pd.Timestamp("2023-01-01"):
+        raise click.UsageError("TRAIN dates must be ordered and end before validation 2023")
     if (wind_mode == "directional") != (wind_cache is not None):
         raise click.UsageError("directional wind requires --wind-cache; omit it for --wind-mode none")
     wind = load_wind_source_cache(wind_cache) if wind_cache else None
     seed = int(np.random.default_rng().integers(0, 2**31 - 1)) if seed is None else seed
     torch.manual_seed(seed)
     aq = load_aq_sensor_cache(cache)
+    if train_start < aq.time_index[0] or train_end > aq.time_index[-1]:
+        raise click.UsageError("requested TRAIN dates are outside the AQ cache")
     reference = None
     if partition_summary is not None:
         if test_sensor_ids:
@@ -69,18 +85,22 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
             aq, validation_nodes=validation_nodes, test_nodes=len(test_sensor_ids),
             seed=seed, test_sensor_ids=test_sensor_ids)
     mean, std = compute_training_normalization(
-        aq, train_node_mask=train, start="2015-01-01", end="2022-12-31 23:00")
+        aq, train_node_mask=train, start=train_start, end=train_end)
+    reference_normalization_checked = False
     if reference is not None:
-        np.testing.assert_allclose(mean, reference["normalization_mean"], rtol=1e-6)
-        np.testing.assert_allclose(std, reference["normalization_std"], rtol=1e-6)
         if int(train.sum()) != reference["train_nodes"]:
             raise ValueError("reconstructed TRAIN size differs from reference")
+        reference_start = pd.Timestamp(reference.get("train_start", "2015-01-01"))
+        reference_end = pd.Timestamp(reference.get("train_end", "2022-12-31 23:00"))
+        if train_start == reference_start and train_end == reference_end:
+            np.testing.assert_allclose(mean, reference["normalization_mean"], rtol=1e-6)
+            np.testing.assert_allclose(std, reference["normalization_std"], rtol=1e-6)
+            reference_normalization_checked = True
     common = dict(cache=aq, hours=24, context_sensor_mask=train,
                   forbidden_context_mask=validation | test, seed=seed,
                   normalization_mean=mean, normalization_std=std, wind_cache=wind)
     training = CachedKernelDataset(
-        **common, target_fraction=.25, split_start="2015-01-01",
-        split_end="2022-12-31 23:00")
+        **common, target_fraction=.25, split_start=train_start, split_end=train_end)
     validating = CachedKernelDataset(
         **common, target_sensor_mask=validation, split_start="2023-01-01",
         split_end="2023-12-31 23:00")
@@ -103,7 +123,11 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
              sensor_ids=aq.sensor_ids, sensor_node_indices=aq.sensor_node_indices)
     config = dict(epsilon_m=model.epsilon_m, distance_scale_m=model.distance_scale_m,
                   source_policy="all-current-visible", implementation="pyg-vectorized", mode=mode, seed=seed, test_evaluated=False, hours=24,
-                  uses_history=False, train_period="2015-2022", validation_period="2023",
+                  uses_history=False, train_period=f"{train_start.year}-{train_end.year}",
+                  train_start=str(train_start), train_end=str(train_end), validation_period="2023",
+                  normalization_period=f"{train_start} to {train_end}",
+                  partition_reference_normalization_checked=reference_normalization_checked,
+                  learning_rate=1e-3, early_stopping_patience=20, optimization_loss="mae",
                   train_nodes=np.flatnonzero(train).tolist(),
                   validation_nodes=np.flatnonzero(validation).tolist(),
                   test_sensor_ids=aq.sensor_ids[test.reshape(-1)[aq.sensor_node_indices]].tolist(),
@@ -132,6 +156,7 @@ def main(cache, output, mode, test_sensor_ids, validation_nodes, seed, epochs,
     try:
         (output / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
         trainer = GNNTrainer(model=model, device=device, optimization_loss="mae",
+                             learning_rate=config["learning_rate"], patience=config["early_stopping_patience"],
                              show_progress=True, logger=logger)
         training_started = perf_counter()
         if mode == "fixed" and wind_mode == "none":
