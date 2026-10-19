@@ -190,6 +190,12 @@ def test_wind_dataset_preserves_aq_windows_masks_and_test_isolation(wind_inputs,
         aq.values[:, 6] = np.nan
         torch.testing.assert_close(CachedKernelDataset(**options, wind_cache=wind)[index].x, a.x)
     assert windy.wind_coverage == 1.
+    global_wind = CachedKernelDataset(**options, wind_cache=wind, wind_context_only=False)
+    expected = torch.zeros(aq.graph.num_nodes, dtype=torch.bool)
+    expected[wind.node_indices] = torch.as_tensor(wind.align(aq, global_wind.window_end_times)[1][0])
+    torch.testing.assert_close(global_wind[0].wind_available, expected)
+    torch.testing.assert_close(global_wind[0].x, plain[0].x)
+    assert not global_wind[0].context_mask[4:].any()
 
 
 @pytest.mark.parametrize("mode", ["power", "fixed"])

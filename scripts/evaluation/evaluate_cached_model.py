@@ -21,7 +21,7 @@ from metraq_gnn.data.wind_cache import load_wind_source_cache
 from metraq_gnn.evaluation import (
     collect_sensor_predictions, summarize_all_predictions, summarize_sensor_predictions,
 )
-from metraq_gnn.model import ConvexGeometricKernel, SensorToGridGNN, SpatioTemporalGNN
+from metraq_gnn.model import ConvexGeometricKernel, SensorToGridGNN, SpatioTemporalGNN, AdvectionDiffusionGNN
 
 
 def selected_test_windows(dataset, *, index_path: Path):
@@ -81,7 +81,7 @@ def prepare_dataset(model_kind, aq, config, masks, traffic_cache, wind_cache=Non
         normalization_std=np.asarray(config["normalization_std"], dtype=np.float32),
         context_sensor_mask=train | validation, forbidden_context_mask=test,
         target_sensor_mask=test, split_start="2024-01-01", split_end="2024-12-31 23:00")
-    if model_kind == "convex-kernel":
+    if model_kind in {"convex-kernel", "advection-diffusion"}:
         if traffic_cache is not None:
             raise click.ClickException("convex kernel has no traffic features; omit --traffic-cache")
         active = config.get("wind_mode", "none") == "directional"
@@ -95,7 +95,10 @@ def prepare_dataset(model_kind, aq, config, masks, traffic_cache, wind_cache=Non
             wind = load_wind_source_cache(path)
             if wind.metadata["fingerprint"] != config.get("wind_cache_fingerprint"):
                 raise click.ClickException("wind cache identity differs from training")
-        return CachedKernelDataset(**options, wind_cache=wind)
+        if model_kind == "advection-diffusion" and not wind.metadata["observed_only"]:
+            raise click.ClickException("advection-diffusion requires an observed-only wind cache")
+        return CachedKernelDataset(**options, wind_cache=wind,
+            wind_context_only=config.get("wind_context_only", model_kind != "advection-diffusion"))
     if wind_cache is not None:
         raise click.ClickException("GNN wind features are not implemented; omit --wind-cache")
     if traffic_cache is None and config.get("traffic_cache"):
@@ -109,6 +112,10 @@ def prepare_dataset(model_kind, aq, config, masks, traffic_cache, wind_cache=Non
 
 def build_model(model_kind, aq, config, masks, sample):
     """Only architecture construction differs; checkpoint loading is shared."""
+    if model_kind == "advection-diffusion":
+        return AdvectionDiffusionGNN(channels=len(aq.magnitude_ids),
+            cell_size_m=config["cell_size_m"], propagation_steps=config["propagation_steps"],
+            normalization_mean=config["normalization_mean"], normalization_std=config["normalization_std"])
     if model_kind == "convex-kernel":
         model = ConvexGeometricKernel(
             mode=config["mode"], cell_size_m=config["cell_size_m"],
@@ -148,7 +155,7 @@ def validate_reference(reference, config, aq, masks, test_windows_index):
 
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"], "show_default": True})
-@click.option("--model", "model_kind", type=click.Choice(["auto", "gnn", "convex-kernel"]), default="auto", help="Auto detects kernel runs from config.json.")
+@click.option("--model", "model_kind", type=click.Choice(["auto", "gnn", "convex-kernel", "advection-diffusion"]), default="auto", help="Auto detects architecture from config.json.")
 @click.option("--reference-summary", type=click.Path(exists=True, path_type=Path), help="Optional reference partition, normalization and TEST counts.")
 @click.option("--run-dir", type=click.Path(path_type=Path, exists=True, file_okay=False), required=True)
 @click.option("--cache", type=click.Path(path_type=Path, exists=True, file_okay=False), required=True)
@@ -173,6 +180,8 @@ def main(run_dir, cache, traffic_cache, test_windows_index, output, batch_size,
     config = {**training, **(json.loads(config_path.read_text()) if config_path.exists() else {})}
     if model_kind == "auto":
         model_kind = "convex-kernel" if config.get("mode") in {"fixed", "power", "neural"} else "gnn"
+        if config.get("architecture") == "advection-diffusion":
+            model_kind = "advection-diffusion"
     destination = output or run_dir / "test-evaluation"
     csv_output = destination.suffix.lower() == ".csv"
     predictions_path = destination if csv_output else destination / "predictions.csv"
@@ -220,6 +229,8 @@ def main(run_dir, cache, traffic_cache, test_windows_index, output, batch_size,
         raise click.ClickException("checkpoint changed during evaluation")
     method = (f"CONVEX_KERNEL_{config['mode'].upper()}" if model_kind == "convex-kernel"
               else "GNN_TRAFFIC" if traffic_cache else "GNN")
+    if model_kind == "advection-diffusion":
+        method = "ADVECTION_DIFFUSION_GNN"
     if model_kind == "convex-kernel" and config.get("wind_mode", "none") == "directional":
         method += "_WIND_DIRECTIONAL"
     predictions.insert(0, "sensor_group", "-".join(str(value) for value in sorted(test_ids)))

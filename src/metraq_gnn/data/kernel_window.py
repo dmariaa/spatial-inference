@@ -19,6 +19,7 @@ class CachedKernelDataset(Dataset):
         self, *, cache, context_sensor_mask, forbidden_context_mask, hours,
         split_start, split_end, target_sensor_mask=None, target_fraction=None,
         normalization_mean=None, normalization_std=None, seed=42, wind_cache=None,
+        wind_context_only=True,
     ):
         if hours <= 0:
             raise ValueError("hours must be positive")
@@ -102,13 +103,15 @@ class CachedKernelDataset(Dataset):
         self.target = None if target is None else torch.from_numpy(target.copy())
         self.target_fraction, self.seed, self.epoch = target_fraction, int(seed), 0
         self.wind_nodes = None
+        self.wind_context_only = bool(wind_context_only)
         self.wind_coverage = None
         if wind_cache is not None:
             wind_values, wind_available = wind_cache.align(cache, self.window_end_times)
             self.wind_values = torch.from_numpy(wind_values)
             self.wind_available = torch.from_numpy(wind_available)
             self.wind_nodes = torch.as_tensor(np.asarray(wind_cache.node_indices).copy(), dtype=torch.long)
-            context_columns = context.reshape(-1)[np.asarray(wind_cache.node_indices)]
+            context_columns = (context.reshape(-1)[np.asarray(wind_cache.node_indices)]
+                               if self.wind_context_only else np.ones(len(wind_cache.node_indices), dtype=bool))
             self.wind_coverage = float(wind_available[:, context_columns].mean())
 
     def __len__(self):
@@ -153,8 +156,10 @@ class CachedKernelDataset(Dataset):
         if self.wind_nodes is not None:
             data.wind_uv = torch.zeros((self.node_count, 2))
             data.wind_available = torch.zeros(self.node_count, dtype=torch.bool)
-            # Only context AQ sources can use wind, independent of target labels.
-            wind_mask = self.wind_available[index] & context.reshape(-1)[self.wind_nodes]
+            # Meteorology can be globally available even where AQ is hidden.
+            wind_mask = self.wind_available[index].clone()
+            if self.wind_context_only:
+                wind_mask &= context.reshape(-1)[self.wind_nodes]
             data.wind_uv[self.wind_nodes] = torch.where(wind_mask[:, None], self.wind_values[index], 0.)
             data.wind_available[self.wind_nodes] = wind_mask
         return data
