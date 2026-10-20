@@ -43,3 +43,21 @@ def test_flux_conservation_positivity_and_wind_direction():
     smooth = model.local_step(peak, edges, delta, torch.zeros(2, 2))
     assert smooth.max() < peak.max()
     torch.testing.assert_close(smooth.sum(), peak.sum())
+
+
+def test_diagnostic_gates_trace_and_idw_leave_state_unchanged():
+    model = AdvectionDiffusionGNN(propagation_steps=2)
+    data = sample()
+    original = {name: tensor.clone() for name, tensor in model.state_dict().items()}
+    prediction = model(data)
+    events = []
+    traced = model(data, trace=lambda graph, step, before, moved, anchored:
+                   events.append((graph, step, before.clone(), moved.clone(), anchored.clone())))
+    torch.testing.assert_close(traced, prediction, rtol=0, atol=0)
+    assert [event[1] for event in events] == [0, 1, 2]
+    disabled = model(data, diffusion=False, advection=False)
+    model.propagation_steps = 0
+    torch.testing.assert_close(disabled, model(data), rtol=0, atol=0)
+    torch.testing.assert_close(model(data, initialization="idw")[1], torch.tensor([20.]))
+    for name, tensor in model.state_dict().items():
+        torch.testing.assert_close(tensor, original[name], rtol=0, atol=0)

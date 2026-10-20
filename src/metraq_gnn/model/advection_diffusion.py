@@ -57,7 +57,8 @@ class AdvectionDiffusionGNN(nn.Module):
         if not torch.isfinite(self.mean).all() or not torch.isfinite(self.std).all() or (self.std <= 0).any():
             raise ValueError("invalid normalization")
 
-    def local_step(self, concentration, edges, displacement_m, wind):
+    def local_step(self, concentration, edges, displacement_m, wind, *,
+                   diffusion=True, advection=True):
         """Closed-grid conservative flux update with a nonnegative stable step."""
         source, target = edges
         if not source.numel():
@@ -68,14 +69,21 @@ class AdvectionDiffusionGNN(nn.Module):
         parallel = (velocity * direction).sum(-1)
         # Effective rates; coefficients are learned, not measured diffusivity.
         scaled_distance = distance / self.cell_size_m
-        rate = (torch.nn.functional.softplus(self.raw_diffusion) / scaled_distance.square()
-                + torch.nn.functional.softplus(self.raw_advection) * parallel.relu() / scaled_distance)
-        outgoing = concentration.new_zeros(len(concentration)).index_add(0, source, rate)
+        diffusion_rate = torch.nn.functional.softplus(self.raw_diffusion) / scaled_distance.square()
+        advection_rate = torch.nn.functional.softplus(self.raw_advection) * parallel.relu() / scaled_distance
+        full_rate = diffusion_rate + advection_rate
+        rate = diffusion_rate * diffusion + advection_rate * advection
+        # Preserve the full model's step when ablating a component: only its
+        # flux is removed, avoiding a simultaneous change of integration time.
+        outgoing = concentration.new_zeros(len(concentration)).index_add(0, source, full_rate)
         step = .9 / (1. + outgoing.max())
         flux = step * rate[:, None] * concentration[source]
         return concentration.index_add(0, target, flux).index_add(0, source, -flux)
 
-    def forward(self, data):
+    def forward(self, data, *, initialization="learned", diffusion=True,
+                advection=True, trace=None):
+        if initialization not in {"learned", "idw"}:
+            raise ValueError("initialization must be learned or idw")
         if not hasattr(data, "wind_uv") or not hasattr(data, "wind_available"):
             raise ValueError("wind_uv and wind_available are required")
         graphs = getattr(data, "num_graphs", 1)
@@ -124,17 +132,24 @@ class AdvectionDiffusionGNN(nn.Module):
                                parallel[..., None], transverse[..., None],
                                available_wind[sources][None, :, None].expand(nodes, -1, -1)), -1).reshape(-1, 6)
             edges = torch.stack((sources.repeat(nodes), torch.arange(nodes, device=pos.device).repeat_interleave(len(sources))))
-            initial = self.initializer(torch.cat((aq, visible.all(1, keepdim=True).float()), -1), edges, attrs, baseline)
+            initial = (self.initializer(torch.cat((aq, visible.all(1, keepdim=True).float()), -1), edges, attrs, baseline)
+                       if initialization == "learned" else baseline)
             concentration = (initial * self.std + self.mean).clamp_min(0.)
             observed = aq * self.std + self.mean
             concentration = torch.where(visible, observed, concentration)
+            if trace is not None:
+                trace(graph, 0, concentration, concentration, concentration)
             # Derive eight-neighbour grid edges from positions; no cross-batch edges.
             offset = pos[None] - pos[:, None]
             adjacency = (offset.abs().amax(-1) <= 1.001) & (offset.norm(dim=-1) > 0.)
             local = adjacency.nonzero().T
             displacement = (pos[local[1]] - pos[local[0]]) * self.cell_size_m
-            for _ in range(self.propagation_steps):
-                concentration = self.local_step(concentration, local, displacement, wind)
-                concentration = torch.where(visible, observed, concentration)
+            for step_index in range(self.propagation_steps):
+                before = concentration
+                transported = self.local_step(before, local, displacement, wind,
+                                              diffusion=diffusion, advection=advection)
+                concentration = torch.where(visible, observed, transported)
+                if trace is not None:
+                    trace(graph, step_index + 1, before, transported, concentration)
             outputs.append((concentration - self.mean) / self.std)
         return torch.cat(outputs)
